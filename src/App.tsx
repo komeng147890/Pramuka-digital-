@@ -117,6 +117,10 @@ export default function App() {
     const saved = localStorage.getItem('scout_activities');
     return saved ? JSON.parse(saved) : MOCK_ACTIVITIES;
   });
+  const [badges, setBadges] = useState<Badge[]>(() => {
+    const saved = localStorage.getItem('scout_badges');
+    return saved ? JSON.parse(saved) : MOCK_BADGES;
+  });
   
   const [apiToken, setApiToken] = useState(() => {
     return localStorage.getItem('scout_api_token') || '2130';
@@ -199,6 +203,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('scout_activities', JSON.stringify(activities));
   }, [activities]);
+
+  useEffect(() => {
+    localStorage.setItem('scout_badges', JSON.stringify(badges));
+  }, [badges]);
 
   useEffect(() => {
     localStorage.setItem('scout_users', JSON.stringify(users));
@@ -438,10 +446,14 @@ export default function App() {
                 {currentView === 'badges' && (
                   <BadgesView 
                     members={members} 
-                    badges={MOCK_BADGES} 
+                    badges={badges} 
                     onAwardBadge={(memberId, badgeId) => {
                       setMembers(members.map(m => m.id === memberId ? {...m, badges: [...m.badges, badgeId]} : m));
                       toast.success('Lencana dianugerahkan!');
+                    }}
+                    onAddBadge={(newBadge: Badge) => {
+                      setBadges(prev => [...prev, newBadge]);
+                      toast.success('Lencana baru berhasil dibuat!');
                     }}
                     isAdmin={isAdmin}
                   />
@@ -861,16 +873,127 @@ function AttendanceView({ members, activities }: any) {
   );
 }
 
-function BadgesView({ members, badges, onAwardBadge, isAdmin }: any) {
+function BadgesView({ members, badges, onAwardBadge, onAddBadge, isAdmin }: any) {
   const [selectedMember, setSelectedMember] = useState<string>('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [newBadge, setNewBadge] = useState({
+    name: '',
+    description: '',
+    icon: '🎖️',
+    color: 'bg-scout-green',
+    category: 'Pencapaian'
+  });
+
+  const COLORS = [
+    { name: 'Scout Green', class: 'bg-scout-green' },
+    { name: 'Accent Orange', class: 'bg-accent' },
+    { name: 'Blue', class: 'bg-blue-500' },
+    { name: 'Amber', class: 'bg-amber-500' },
+    { name: 'Orange', class: 'bg-orange-500' },
+    { name: 'Purple', class: 'bg-purple-500' },
+    { name: 'Rose', class: 'bg-rose-500' },
+    { name: 'Cyan', class: 'bg-cyan-500' },
+  ];
+
+  const handleCreate = () => {
+    if (!newBadge.name || !newBadge.description) {
+      toast.error('Harap isi semua kolom!');
+      return;
+    }
+    onAddBadge({
+      id: `b-${Date.now()}`,
+      ...newBadge
+    });
+    setIsCreating(false);
+    setNewBadge({
+      name: '',
+      description: '',
+      icon: '🎖️',
+      color: 'bg-scout-green',
+      category: 'Pencapaian'
+    });
+  };
 
   return (
     <div className="space-y-8">
        <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
-          <h3 className="text-xl font-black text-scout-green uppercase tracking-tight mb-6">Pencapaian SKU & TKK</h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-xl font-black text-scout-green uppercase tracking-tight">Pencapaian SKU & TKK</h3>
+            {isAdmin && (
+              <button 
+                onClick={() => setIsCreating(!isCreating)}
+                className="flex items-center gap-2 bg-scout-green text-white px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest hover:scale-105 transition-all"
+              >
+                {isCreating ? <X size={16} /> : <Plus size={16} />}
+                {isCreating ? 'Batal' : 'Buat Lencana'}
+              </button>
+            )}
+          </div>
+
+          {isCreating && (
+            <motion.div 
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              className="bg-earth-beige/50 p-6 rounded-3xl border border-soft-sage mb-8 overflow-hidden"
+            >
+              <h4 className="text-sm font-black text-scout-green uppercase tracking-widest mb-4">Rancang Lencana Baru</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                <input 
+                  type="text" 
+                  placeholder="Nama Lencana (Contoh: Ahli Sandi)"
+                  value={newBadge.name}
+                  onChange={e => setNewBadge({...newBadge, name: e.target.value})}
+                  className="px-4 py-3 bg-white border border-soft-sage rounded-2xl outline-none font-bold text-sm"
+                />
+                <input 
+                  type="text" 
+                  placeholder="Deskripsi Singkat"
+                  value={newBadge.description}
+                  onChange={e => setNewBadge({...newBadge, description: e.target.value})}
+                  className="px-4 py-3 bg-white border border-soft-sage rounded-2xl outline-none font-bold text-sm"
+                />
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    placeholder="Icon Emoji"
+                    value={newBadge.icon}
+                    onChange={e => setNewBadge({...newBadge, icon: e.target.value})}
+                    className="w-20 px-4 py-3 bg-white border border-soft-sage rounded-2xl outline-none font-bold text-sm text-center"
+                  />
+                  <select 
+                    value={newBadge.category}
+                    onChange={e => setNewBadge({...newBadge, category: e.target.value})}
+                    className="flex-1 px-4 py-3 bg-white border border-soft-sage rounded-2xl outline-none font-bold text-sm"
+                  >
+                    <option>Kecakapan Umum</option>
+                    <option>Kecakapan Khusus</option>
+                    <option>Penghargaan</option>
+                    <option>Pencapaian</option>
+                  </select>
+                </div>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-[10px] font-bold text-text-light uppercase tracking-widest mr-2">Warna:</span>
+                  {COLORS.map(c => (
+                    <button 
+                      key={c.class}
+                      onClick={() => setNewBadge({...newBadge, color: c.class})}
+                      className={`w-8 h-8 rounded-lg ${c.class} border-2 ${newBadge.color === c.class ? 'border-scout-green scale-110' : 'border-white'} shadow-sm transition-all`}
+                    />
+                  ))}
+                </div>
+              </div>
+              <button 
+                onClick={handleCreate}
+                className="w-full bg-scout-green text-white py-3 rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-scout-green/10"
+              >
+                Simpan & Terbitkan Lencana 🎖️
+              </button>
+            </motion.div>
+          )}
+
           <div className="flex gap-4 items-end mb-8">
              <div className="flex-1">
-                <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1 mb-1 block">Pilih Anggota</label>
+                <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1 mb-1 block">Pilih Anggota untuk dianugerahi</label>
                 <select value={selectedMember} onChange={e => setSelectedMember(e.target.value)} className="w-full px-4 py-3 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm">
                    <option value="">Pilih Anggota...</option>
                    {members.map((m: Member) => <option key={m.id} value={m.id}>{m.name}</option>)}
