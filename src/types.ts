@@ -59,7 +59,9 @@ export interface User {
   username: string;
   password: string;
   fullName: string;
-  role: 'Admin' | 'Pembina';
+  role: 'Admin' | 'Pembina' | 'Owner';
+  status: 'active' | 'pending';
+  email?: string;
 }
 
 export interface AppNotification {

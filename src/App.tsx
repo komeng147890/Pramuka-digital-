@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Users, 
@@ -32,14 +32,21 @@ import {
   Archive,
   ArchiveRestore,
   Filter,
-  Sparkles
+  Sparkles,
+  QrCode,
+  Scan,
+  Upload
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { formatDistanceToNow } from 'date-fns';
 import { id as idLocale } from 'date-fns/locale';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged } from 'firebase/auth';
+import firebaseConfig from '../firebase-applet-config.json';
 import { Member, Activity, AttendanceRecord, View, AppNotification, Badge, User, ReportSchedule } from './types';
 import { getScoutAssistantResponse } from './services/geminiService';
+import { QRCodeSVG } from 'qrcode.react';
 import { 
   BarChart, 
   Bar, 
@@ -50,6 +57,11 @@ import {
   ResponsiveContainer, 
   Cell 
 } from 'recharts';
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
 // Mock Data
 const MOCK_BADGES: Badge[] = [
@@ -76,8 +88,16 @@ export default function App() {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [users, setUsers] = useState<User[]>(() => {
     const saved = localStorage.getItem('scout_users');
-    return saved ? JSON.parse(saved) : [
-      { id: '1', username: 'admin', password: 'pramuka123', fullName: 'Kak Admin', role: 'Admin' }
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return parsed.map((u: any) => ({
+        ...u,
+        role: u.role || 'Pembina',
+        status: u.status || 'active'
+      }));
+    }
+    return [
+      { id: '1', username: 'admin', password: '123', fullName: 'Kak Admin (Owner)', role: 'Owner', status: 'active' }
     ];
   });
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -85,6 +105,9 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   
+  const isOwner = currentUser?.role === 'Owner';
+  const isAdmin = currentUser?.role === 'Admin' || isOwner;
+
   // App State
   const [members, setMembers] = useState<Member[]>(() => {
     const saved = localStorage.getItem('scout_members');
@@ -94,18 +117,11 @@ export default function App() {
     const saved = localStorage.getItem('scout_activities');
     return saved ? JSON.parse(saved) : MOCK_ACTIVITIES;
   });
-  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
-  const [isAddActivityOpen, setIsAddActivityOpen] = useState(false);
-  const [isAssignBadgeOpen, setIsAssignBadgeOpen] = useState(false);
-  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [reportSchedules, setReportSchedules] = useState<ReportSchedule[]>(() => {
-    const saved = localStorage.getItem('scout_schedules');
-    return saved ? JSON.parse(saved) : [];
-  });
+  
   const [apiToken, setApiToken] = useState(() => {
     return localStorage.getItem('scout_api_token') || '2130';
   });
-  const [selectedMemberForBadge, setSelectedMemberForBadge] = useState<Member | null>(null);
+
   const [notifications, setNotifications] = useState<AppNotification[]>([
     {
       id: '1',
@@ -124,9 +140,58 @@ export default function App() {
       read: true
     }
   ]);
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
-  // Persistence Effects
+  const [reportSchedules, setReportSchedules] = useState<ReportSchedule[]>(() => {
+    const saved = localStorage.getItem('scout_schedules');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [isIDCardOpen, setIsIDCardOpen] = useState(false);
+  const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
+
+  // Firebase Auth Listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        // Find existing user by email
+        const existingUser = users.find(u => u.email === firebaseUser.email);
+        
+        if (existingUser) {
+          setCurrentUser(existingUser);
+          setIsAuthenticated(true);
+        } else {
+          // Auto-register owner if email matches
+          if (firebaseUser.email === 'rafisyahputra728@gmail.com') {
+            const ownerUser: User = {
+              id: firebaseUser.uid,
+              username: 'admin',
+              fullName: firebaseUser.displayName || 'Kak Admin',
+              password: '', // No password for google auth users
+              role: 'Owner',
+              status: 'active',
+              email: firebaseUser.email
+            };
+            
+            setUsers(prev => {
+              if (prev.some(u => u.username === 'admin')) {
+                 return prev.map(u => u.username === 'admin' ? ownerUser : u);
+              }
+              return [...prev, ownerUser];
+            });
+            setCurrentUser(ownerUser);
+            setIsAuthenticated(true);
+            toast.success(`Selamat Datang, ${ownerUser.fullName}!`, {
+              description: 'Berhasil masuk sebagai OWNER melalui Google Login.'
+            });
+          }
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [users]);
+
+  // Effects
   useEffect(() => {
     localStorage.setItem('scout_members', JSON.stringify(members));
   }, [members]);
@@ -134,14 +199,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('scout_activities', JSON.stringify(activities));
   }, [activities]);
-
-  useEffect(() => {
-    localStorage.setItem('scout_schedules', JSON.stringify(reportSchedules));
-  }, [reportSchedules]);
-
-  useEffect(() => {
-    localStorage.setItem('scout_api_token', apiToken);
-  }, [apiToken]);
 
   useEffect(() => {
     localStorage.setItem('scout_users', JSON.stringify(users));
@@ -156,1724 +213,1073 @@ export default function App() {
     };
     handleResize();
     window.addEventListener('resize', handleResize);
-
-    // Initial push permission
-    if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission();
-    }
-
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
   if (!isAuthenticated) {
-    return authMode === 'login' ? (
-      <LoginView 
-        users={users} 
-        onLogin={(user) => {
-          setCurrentUser(user);
-          setIsAuthenticated(true);
-        }} 
-        onSwitchToRegister={() => setAuthMode('register')} 
-      />
-    ) : (
+    const handleGoogleSignIn = async () => {
+      try {
+        const result = await signInWithPopup(auth, googleProvider);
+      } catch (error: any) {
+        toast.error('Gagal Login Google', {
+          description: error.message
+        });
+      }
+    };
+
+    const handleQRLogin = (data: string) => {
+      try {
+        const decoded = JSON.parse(data);
+        if (decoded.type === 'scout_login' && decoded.u && decoded.p) {
+          const user = users.find(u => u.username === decoded.u && u.password === decoded.p);
+          if (user) {
+            if (user.status === 'pending' && user.role !== 'Owner') {
+              toast.error('Akun Belum Aktif', { description: 'Menunggu konfirmasi Admin.' });
+              return;
+            }
+            setCurrentUser(user);
+            setIsAuthenticated(true);
+            setIsQRScannerOpen(false);
+            toast.success(`Berhasil Login QR, Kak ${user.fullName}!`);
+          } else {
+            toast.error('User Tidak Ditemukan');
+          }
+        }
+      } catch {
+        toast.error('QR Code Tidak Valid');
+      }
+    };
+
+    if (authMode === 'login') {
+      return (
+        <>
+          <LoginView 
+            users={users} 
+            onLogin={(user) => {
+              setCurrentUser(user);
+              setIsAuthenticated(true);
+            }} 
+            onGoogleLogin={handleGoogleSignIn}
+            onQRLogin={() => setIsQRScannerOpen(true)}
+            onSwitchToRegister={() => setAuthMode('register')} 
+          />
+          {isQRScannerOpen && (
+            <QRScannerModal 
+              isOpen={isQRScannerOpen} 
+              onClose={() => setIsQRScannerOpen(false)} 
+              onScan={handleQRLogin} 
+            />
+          )}
+        </>
+      );
+    }
+    return (
       <RegisterView 
-        onRegister={(newUser) => {
-          setUsers(prev => [...prev, newUser]);
+        onRegister={(u) => {
+          setUsers(prev => [...prev, u]);
           setAuthMode('login');
         }} 
+        onGoogleLogin={handleGoogleSignIn}
         onSwitchToLogin={() => setAuthMode('login')} 
       />
     );
   }
 
-  const addNotification = (notif: Omit<AppNotification, 'id' | 'time' | 'read'>) => {
-    const newNotif: AppNotification = {
-      ...notif,
-      id: Math.random().toString(36).substr(2, 9),
-      time: new Date().toISOString(),
-      read: false
-    };
-    setNotifications(prev => [newNotif, ...prev]);
-    
-    toast(newNotif.title, {
-      description: newNotif.message,
-      icon: <Zap size={16} className="text-accent" />,
-      action: {
-        label: 'Cek Kuy',
-        onClick: () => {
-          setIsNotificationsOpen(true);
-          markAllAsRead();
-        }
-      }
-    });
-
-    if ('Notification' in window && Notification.permission === 'granted') {
-      new Notification(newNotif.title, { body: newNotif.message });
-    }
-  };
-
-  const markAllAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-  };
-
-  const addMember = (member: Omit<Member, 'id'>) => {
-    const newMember = { ...member, id: Math.random().toString(36).substr(2, 9) };
-    setMembers([newMember, ...members]);
-    setIsAddMemberOpen(false);
-    addNotification({
-      title: '🔥 Squad Member Baru!',
-      message: `${newMember.name} udah join squad kita. Sambut dong!`,
-      type: 'activity'
+  const approveUser = (id: string) => {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, status: 'active' } : u));
+    toast.success('Akun Berhasil Dikonfirmasi!', {
+      description: 'Sekarang user tersebut sudah bisa masuk ke sistem.'
     });
   };
 
-  const addActivity = (activity: Omit<Activity, 'id'>) => {
-    const newActivity = { ...activity, id: Math.random().toString(36).substr(2, 9) };
-    setActivities([newActivity, ...activities]);
-    setIsAddActivityOpen(false);
-    addNotification({
-      title: '📅 Misi Baru Dibuat!',
-      message: `${newActivity.title} udah dijadwalkan. Persiapkan perlengkapannya!`,
-      type: 'info'
+  const deleteUser = (id: string) => {
+    setUsers(prev => prev.filter(u => u.id !== id));
+    toast.info('Akun Berhasil Dihapus.');
+  };
+
+  const promoteUser = (id: string) => {
+    setUsers(prev => prev.map(u => u.id === id ? { ...u, role: 'Admin' } : u));
+    toast.success('Berhasil Diangkat!', {
+      description: 'User tersebut sekarang memiliki hak akses Admin.'
     });
   };
 
-  const toggleArchiveActivity = (id: string) => {
-    setActivities(prev => prev.map(a => {
-      if (a.id === id) {
-        const newState = !a.isArchived;
-        addNotification({
-          title: newState ? '📁 Misi Diarsipkan' : '🔓 Misi Dipulihkan',
-          message: `${a.title} telah ${newState ? 'dimasukkan ke arsap' : 'dikeluarkan dari arsip'}.`,
-          type: 'info'
-        });
-        return { ...a, isArchived: newState };
-      }
-      return a;
-    }));
+  const updateProfile = (data: Partial<User>) => {
+    setUsers(prev => prev.map(u => u.id === currentUser?.id ? { ...u, ...data } : u));
+    setCurrentUser(prev => prev ? { ...prev, ...data } : null);
+    toast.success('Profil Diupdate!');
   };
-
-  const handleAssignBadge = (memberId: string, badgeId: string) => {
-    setMembers(prev => prev.map(m => {
-      if (m.id === memberId) {
-        const currentBadges = m.badges || [];
-        if (currentBadges.includes(badgeId)) return m;
-        const badge = MOCK_BADGES.find(b => b.id === badgeId);
-        addNotification({
-          title: '🏅 Lencana Baru!',
-          message: `${m.name} baru saja mendapatkan lencana ${badge?.name}! Selamat!`,
-          type: 'info'
-        });
-        return { ...m, badges: [...currentBadges, badgeId] };
-      }
-      return m;
-    }));
-    setIsAssignBadgeOpen(false);
-  };
-
-  const SidebarItem = ({ icon: Icon, label, view }: { icon: any, label: string, view: View }) => (
-    <button
-      onClick={() => {
-        setCurrentView(view);
-        if (isMobile) setIsSidebarOpen(false);
-      }}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-200 ${
-        currentView === view 
-          ? 'bg-white/15 text-white font-semibold' 
-          : 'text-white/70 hover:bg-white/10'
-      }`}
-    >
-      <Icon size={20} className={currentView === view ? 'text-white' : 'text-white/50'} />
-      <span className="text-sm">{label}</span>
-      {currentView === view && (
-        <motion.div 
-          layoutId="active-pill" 
-          className="ml-auto"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <div className="w-1.5 h-1.5 rounded-full bg-accent" />
-        </motion.div>
-      )}
-    </button>
-  );
 
   return (
-    <div className="min-h-screen bg-earth-beige flex text-text-dark font-sans">
+    <div className="flex h-screen bg-earth-beige font-sans text-text-dark overflow-hidden">
       {/* Sidebar */}
-      <aside 
-        className={`${
-          isSidebarOpen ? 'w-64' : 'w-0'
-        } fixed md:static h-full bg-scout-green text-white transition-all duration-300 z-50 overflow-hidden flex flex-col`}
-      >
-        <div className="p-6 border-b border-white/10 flex items-center gap-3">
-          <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-scout-green shadow-lg">
-            <Award size={24} />
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-soft-sage transition-transform duration-300 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:static lg:translate-x-0`}>
+        <div className="flex flex-col h-full">
+          <div className="p-6 border-b border-soft-sage flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-scout-green rounded-xl flex items-center justify-center text-white shadow-lg">
+                <Award size={24} />
+              </div>
+              <span className="font-black text-scout-green tracking-tighter uppercase text-2xl">ONE<span className="text-accent">KERTA</span></span>
+            </div>
+            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-1 hover:bg-earth-beige rounded-lg">
+              <X size={20} />
+            </button>
           </div>
-          <div className="flex flex-col">
-            <h1 className="font-black text-xl tracking-tighter leading-none text-white uppercase italic">Pramuka Digital</h1>
-            <span className="text-[10px] text-accent font-bold tracking-widest uppercase mt-1">Gugusdepan Setu</span>
-          </div>
-        </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-2">
-          <SidebarItem icon={LayoutDashboard} label="🏠 Basecamp" view="dashboard" />
-          <SidebarItem icon={Users} label="👥 Squad Kita" view="members" />
-          <SidebarItem icon={Award} label="🏅 Lencana" view="badges" />
-          <SidebarItem icon={BookOpen} label="🔥 Agenda Seru" view="activities" />
-          <SidebarItem icon={CheckCircle2} label="✅ Hadir Kuy!" view="attendance" />
-          <SidebarItem icon={Sparkles} label="✨ Hubungi Pusat (AI)" view="ai-assistant" />
-          <div className="pt-4 mt-4 border-t border-white/10">
-            <SidebarItem icon={Settings} label="⚙️ Oprek Sistem" view="settings" />
-          </div>
-          <button 
-            onClick={() => setIsAuthenticated(false)}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-white/70 hover:bg-red-500/20 hover:text-red-200 transition-all duration-200 mt-2"
-          >
-            <LogOut size={20} className="text-white/50" />
-            <span className="text-sm">Keluar Squad</span>
-          </button>
-        </nav>
+          <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+            <NavItem icon={<LayoutDashboard size={20}/>} label="Beranda" active={currentView === 'dashboard'} onClick={() => setCurrentView('dashboard')} />
+            <NavItem icon={<Users size={20}/>} label="Anggota" active={currentView === 'members'} onClick={() => setCurrentView('members')} />
+            <NavItem icon={<Calendar size={20}/>} label="Kegiatan" active={currentView === 'activities'} onClick={() => setCurrentView('activities')} />
+            <NavItem icon={<CheckCircle2 size={20}/>} label="Absensi" active={currentView === 'attendance'} onClick={() => setCurrentView('attendance')} />
+            <NavItem icon={<BookOpen size={20}/>} label="SKU / TKK" active={currentView === 'badges'} onClick={() => setCurrentView('badges')} />
+            <NavItem icon={<Sparkles size={20}/>} label="Asisten AI" active={currentView === 'ai-assistant'} onClick={() => setCurrentView('ai-assistant')} />
+            <NavItem icon={<Settings size={20}/>} label="Pengaturan" active={currentView === 'settings'} onClick={() => setCurrentView('settings')} />
+          </nav>
 
-        <div className="mx-4 mb-4">
-          <button className="w-full py-3 bg-accent/20 hover:bg-accent/40 border-2 border-accent border-dashed rounded-xl flex items-center justify-center gap-2 text-accent font-bold text-xs transition-all animate-pulse">
-            <span>📲 Install App</span>
-          </button>
-        </div>
-
-        <div className="p-4 bg-white/10 m-4 rounded-xl border border-white/5">
-          <p className="text-[10px] font-black text-accent uppercase tracking-widest text-center italic">Pramuka Digital</p>
-          <div className="text-[9px] text-white/50 text-center leading-tight mt-1">
-            Platform Cerdas Gugusdepan Setu
+          <div className="p-4 border-t border-soft-sage">
+            <button 
+              onClick={() => setIsIDCardOpen(true)}
+              className="w-full mb-3 flex items-center gap-3 px-4 py-3 bg-accent/10 text-accent rounded-2xl font-bold text-xs uppercase tracking-widest hover:bg-accent hover:text-white transition-all group"
+            >
+              <QrCode size={18} className="group-hover:scale-110 transition-transform" />
+              <span>Kartu Anggota</span>
+            </button>
+            <div className="flex items-center gap-3 p-3 bg-earth-beige rounded-2xl border border-soft-sage mb-4">
+              <div className="w-10 h-10 rounded-xl bg-scout-green text-white flex items-center justify-center font-black text-lg">
+                {currentUser?.fullName.charAt(0)}
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <p className="text-xs font-bold truncate">{currentUser?.fullName}</p>
+                <p className="text-[10px] text-accent font-bold uppercase tracking-widest">{currentUser?.role}</p>
+              </div>
+              <button 
+                onClick={async () => {
+                  if (auth.currentUser) {
+                    await auth.signOut();
+                  }
+                  setIsAuthenticated(false);
+                  setCurrentUser(null);
+                }}
+                className="text-text-light hover:text-red-500"
+              >
+                <LogOut size={18} />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-soft-sage px-6 flex items-center justify-between sticky top-0 z-40">
+      <main className="flex-1 flex flex-col min-w-0 bg-earth-beige overflow-hidden">
+        <header className="bg-white border-b border-soft-sage h-20 flex items-center justify-between px-8 z-30">
           <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className="p-2 hover:bg-soft-sage rounded-lg text-text-light transition-colors"
-            >
-              {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden p-2 hover:bg-earth-beige rounded-xl">
+              <Menu size={24} />
             </button>
-            <h2 className="text-lg font-bold text-scout-green capitalize">{currentView.replace('-', ' ')}</h2>
+            <h1 className="text-xl font-black text-scout-green uppercase tracking-tight">{currentView}</h1>
           </div>
           
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center bg-earth-beige px-3 py-1.5 rounded-full border border-soft-sage">
-              <Search size={16} className="text-text-light mr-2" />
-              <input 
-                type="text" 
-                placeholder="Cari data..." 
-                className="bg-transparent text-sm focus:outline-none w-40 placeholder:text-text-light/50"
-              />
-            </div>
-            
+          <div className="flex items-center gap-6">
             <div className="relative">
-              <button 
-                onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
-                className="p-2 hover:bg-soft-sage rounded-lg text-text-light transition-colors relative"
-              >
-                <Bell size={20} />
-                {notifications.some(n => !n.read) && (
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
-                )}
-              </button>
-              
-              <AnimatePresence>
-                {isNotificationsOpen && (
-                  <>
-                    <motion.div 
-                      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                      className="fixed inset-0 z-40"
-                      onClick={() => setIsNotificationsOpen(false)}
-                    />
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                      animate={{ opacity: 1, y: 0, scale: 1 }}
-                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                      className="absolute right-0 mt-2 w-80 bg-white border border-soft-sage rounded-2xl shadow-2xl z-50 overflow-hidden"
-                    >
-                      <div className="p-4 border-b border-soft-sage bg-earth-beige flex items-center justify-between">
-                        <span className="text-xs font-bold text-scout-green uppercase tracking-widest">Pusat Notifikasi 🔔</span>
-                        <button 
-                          onClick={markAllAsRead}
-                          className="text-[10px] font-bold text-accent hover:underline"
-                        >
-                          TANDAI DIBACA
-                        </button>
-                      </div>
-                      <div className="max-h-96 overflow-y-auto divide-y divide-soft-sage/30">
-                        {notifications.length === 0 ? (
-                          <div className="p-8 text-center">
-                            <Info size={32} className="mx-auto text-soft-sage mb-2" />
-                            <p className="text-xs text-text-light">Belum ada info baru nih...</p>
-                          </div>
-                        ) : (
-                          notifications.map(n => (
-                            <div key={n.id} className={`p-4 hover:bg-earth-beige transition-colors ${!n.read ? 'bg-soft-sage/10' : ''}`}>
-                              <div className="flex gap-3">
-                                <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                                  n.type === 'important' ? 'bg-red-100 text-red-600' :
-                                  n.type === 'activity' ? 'bg-blue-100 text-blue-600' :
-                                  'bg-accent/10 text-accent'
-                                }`}>
-                                  {n.type === 'important' ? <Zap size={16} /> : n.type === 'activity' ? <Users size={16} /> : <Info size={16} />}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-bold text-text-dark truncate">{n.title}</p>
-                                  <p className="text-[10px] text-text-light line-clamp-2 mt-1">{n.message}</p>
-                                  <p className="text-[9px] text-text-light/50 mt-1 font-bold">
-                                    {formatDistanceToNow(new Date(n.time), { addSuffix: true, locale: idLocale })}
-                                  </p>
-                                </div>
-                                {!n.read && <div className="w-1.5 h-1.5 bg-accent rounded-full self-start mt-1.5" />}
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                      <div className="p-3 bg-earth-beige border-t border-soft-sage text-center">
-                        <button className="text-[10px] font-bold text-scout-green hover:underline">LIHAT SEMUA AGENDA</button>
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </AnimatePresence>
+              <Bell size={20} className="text-text-light cursor-pointer hover:text-scout-green" />
+              {notifications.some(n => !n.read) && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-accent rounded-full border-2 border-white animate-pulse" />
+              )}
             </div>
-
-            <div className="w-8 h-8 rounded-full bg-scout-green flex items-center justify-center text-xs font-bold text-white shadow-sm ring-1 ring-soft-sage">
-              AD
+            <div className="hidden md:flex flex-col items-end">
+              <span className="text-[10px] font-bold text-text-light uppercase tracking-widest">Waktu Sekarang</span>
+              <span className="text-xs font-black text-scout-green">PRABU-WIDYA 01.001</span>
             </div>
           </div>
         </header>
 
-        <div className="flex-1 p-6 overflow-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentView}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-            >
-              {currentView === 'dashboard' && (
-                <DashboardView 
-                  members={members} 
-                  activities={activities} 
-                  onOpenAI={() => setCurrentView('ai-assistant')}
-                />
-              )}
-              {currentView === 'members' && <MembersView 
-                members={members} 
-                onAdd={() => setIsAddMemberOpen(true)} 
-                onAssignBadge={(member) => {
-                  setSelectedMemberForBadge(member);
-                  setIsAssignBadgeOpen(true);
-                }} 
-                onOpenAI={() => setCurrentView('ai-assistant')}
-              />}
-              {currentView === 'badges' && <BadgesView onOpenAI={() => setCurrentView('ai-assistant')} />}
-              {currentView === 'activities' && (
-                <ActivitiesView 
-                  activities={activities} 
-                  onAdd={() => setIsAddActivityOpen(true)} 
-                  onToggleArchive={toggleArchiveActivity}
-                />
-              )}
-              {currentView === 'attendance' && <AttendanceView members={members} activities={activities} />}
-              {currentView === 'ai-assistant' && (
-                <AIAssistantView 
-                  members={members} 
-                  activities={activities} 
-                  badges={MOCK_BADGES} 
-                />
-              )}
-              {currentView === 'settings' && (
-                <SettingsView 
-                  schedules={reportSchedules} 
-                  onAddSchedule={() => setIsScheduleModalOpen(true)}
-                  onDeleteSchedule={(id) => setReportSchedules(prev => prev.filter(s => s.id !== id))}
-                  apiToken={apiToken}
-                  onUpdateToken={setApiToken}
-                />
-              )}
-            </motion.div>
-          </AnimatePresence>
+        <div className="flex-1 overflow-y-auto p-8 relative">
+           <AnimatePresence mode="wait">
+             <motion.div
+               key={currentView}
+               initial={{ opacity: 0, y: 10 }}
+               animate={{ opacity: 1, y: 0 }}
+               exit={{ opacity: 0, y: -10 }}
+               transition={{ duration: 0.2 }}
+               className="h-full"
+             >
+                {currentView === 'dashboard' && (
+                  <DashboardView 
+                    members={members} 
+                    activities={activities} 
+                    notifications={notifications} 
+                    onNavigate={setCurrentView}
+                    isAdmin={isAdmin}
+                  />
+                )}
+                {currentView === 'members' && (
+                  <MembersView 
+                    members={members} 
+                    onAddMember={(m) => setMembers([...members, m])}
+                    onDeleteMember={(id) => setMembers(members.filter(m => m.id !== id))}
+                    isAdmin={isAdmin}
+                  />
+                )}
+                {currentView === 'activities' && (
+                  <ActivitiesView 
+                    activities={activities} 
+                    onAddActivity={(a) => setActivities([...activities, a])}
+                    onArchiveActivity={(id) => setActivities(activities.map(a => a.id === id ? {...a, isArchived: true} : a))}
+                    isAdmin={isAdmin}
+                  />
+                )}
+                {currentView === 'attendance' && (
+                  <AttendanceView 
+                    members={members} 
+                    activities={activities} 
+                  />
+                )}
+                {currentView === 'badges' && (
+                  <BadgesView 
+                    members={members} 
+                    badges={MOCK_BADGES} 
+                    onAwardBadge={(memberId, badgeId) => {
+                      setMembers(members.map(m => m.id === memberId ? {...m, badges: [...m.badges, badgeId]} : m));
+                      toast.success('Lencana dianugerahkan!');
+                    }}
+                    isAdmin={isAdmin}
+                  />
+                )}
+                {currentView === 'ai-assistant' && <AIAssistantView />}
+                {currentView === 'settings' && (
+                  <SettingsView 
+                    user={currentUser} 
+                    users={users}
+                    onApproveUser={approveUser}
+                    onDeleteUser={deleteUser}
+                    onPromoteUser={promoteUser}
+                    onEditProfile={updateProfile}
+                    reportSchedules={reportSchedules}
+                  />
+                )}
+             </motion.div>
+           </AnimatePresence>
         </div>
-      </main>
 
-      {/* Modals */}
-      <AddMemberModal 
-        isOpen={isAddMemberOpen} 
-        onClose={() => setIsAddMemberOpen(false)} 
-        onAdd={addMember} 
-      />
-      <AddActivityModal 
-        isOpen={isAddActivityOpen} 
-        onClose={() => setIsAddActivityOpen(false)} 
-        onAdd={addActivity} 
-      />
-      <AssignBadgeModal
-        isOpen={isAssignBadgeOpen}
-        onClose={() => setIsAssignBadgeOpen(false)}
-        onAssign={handleAssignBadge}
-        member={selectedMemberForBadge!}
-      />
-      <ScheduleReportModal 
-        isOpen={isScheduleModalOpen}
-        onClose={() => setIsScheduleModalOpen(false)}
-        onAdd={(schedule) => {
-          setReportSchedules(prev => [...prev, schedule]);
-          setIsScheduleModalOpen(false);
-          addNotification({
-            title: '🕰️ Jadwal Dibuat!',
-            message: `Laporan akan otomatis dikirim ke ${schedule.email} setiap ${schedule.frequency.toLowerCase()}.`,
-            type: 'info'
-          });
-        }}
-      />
+        {isIDCardOpen && currentUser && (
+          <IDCardModal 
+            user={currentUser} 
+            onClose={() => setIsIDCardOpen(false)} 
+          />
+        )}
+      </main>
       <Toaster position="top-right" richColors />
     </div>
   );
 }
 
-function AssignBadgeModal({ isOpen, onClose, onAssign, member }: { isOpen: boolean, onClose: () => void, onAssign: (mid: string, bid: string) => void, member: Member }) {
-  if (!isOpen || !member) return null;
-
+function NavItem({ icon, label, active, onClick }: { icon: any, label: string, active: boolean, onClick: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0 }} 
-        animate={{ opacity: 1 }} 
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-scout-green/60 backdrop-blur-sm"
-      />
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="relative bg-white rounded-3xl p-8 w-full max-w-xl shadow-2xl border border-soft-sage"
-      >
-        <h3 className="text-xl font-bold mb-2 text-scout-green uppercase tracking-tight">Berikan Lencana</h3>
-        <p className="text-xs font-bold text-text-light uppercase tracking-widest mb-6">Penerima: {member.name}</p>
-        
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-          {MOCK_BADGES.map(badge => {
-            const hasBadge = member.badges?.includes(badge.id);
-            return (
-              <button
-                key={badge.id}
-                disabled={hasBadge}
-                onClick={() => onAssign(member.id, badge.id)}
-                className={`flex items-start gap-3 p-4 rounded-2xl border transition-all text-left group ${
-                  hasBadge 
-                    ? 'bg-earth-beige border-soft-sage opacity-50 cursor-not-allowed' 
-                    : 'bg-white border-soft-sage hover:border-accent hover:bg-earth-beige active:scale-95'
-                }`}
-              >
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl shadow-sm ${badge.color}`}>
-                  {badge.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-bold text-sm text-text-dark flex items-center justify-between">
-                    {badge.name}
-                    {hasBadge && <Check size={14} className="text-scout-green" />}
-                  </h4>
-                  <p className="text-[10px] text-text-light/70 line-clamp-2 mt-1">{badge.description}</p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        
-        <div className="pt-8 flex justify-end">
-          <button 
-            onClick={onClose}
-            className="px-6 py-2.5 rounded-xl text-sm font-bold text-text-light hover:bg-earth-beige transition-colors"
-          >
-            BATAL
-          </button>
-        </div>
-      </motion.div>
-    </div>
+    <button 
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold text-sm transition-all ${active ? 'bg-scout-green text-white shadow-lg shadow-scout-green/20' : 'text-text-light hover:bg-earth-beige hover:text-scout-green'}`}
+    >
+      {icon}
+      <span>{label}</span>
+      {active && <ChevronRight size={16} className="ml-auto opacity-50" />}
+    </button>
   );
 }
 
-function DashboardView({ 
-  members, 
-  activities, 
-  onOpenAI 
-}: { 
-  members: Member[], 
-  activities: Activity[], 
-  onOpenAI: () => void 
-}) {
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        {[
-          { label: 'Total Squad', value: members.length.toString(), icon: Users, color: 'text-scout-brown' },
-          { label: 'Misi Selesai', value: activities.length.toString(), icon: BookOpen, color: 'text-scout-brown' },
-          { label: 'Vibe Kehadiran', value: '92%', icon: CheckCircle2, color: 'text-scout-brown' },
-        ].map((stat, i) => (
-          <div key={i} className="bg-white p-6 rounded-2xl border border-soft-sage shadow-sm hover:shadow-md transition-shadow">
-            <div className="flex items-center justify-between mb-4">
-              <div className="p-2 rounded-xl bg-soft-sage text-scout-green">
-                <stat.icon size={20} />
-              </div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-text-light">Info Statistik</span>
-            </div>
-            <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
-            <p className="text-xs font-bold uppercase tracking-widest text-text-light mt-1">{stat.label}</p>
-          </div>
-        ))}
-        
-        <button 
-          onClick={onOpenAI}
-          className="bg-accent p-6 rounded-2xl shadow-lg shadow-accent/20 hover:opacity-90 transition-all active:scale-95 text-white flex flex-col justify-between group overflow-hidden relative"
-        >
-          <div className="absolute top-0 right-0 p-2 opacity-20 group-hover:scale-150 transition-transform">
-            <Sparkles size={100} />
-          </div>
-          <div className="flex items-center justify-between mb-4 relative">
-            <div className="p-2 rounded-xl bg-white/20">
-              <Sparkles size={20} />
-            </div>
-          </div>
-          <div className="relative">
-            <p className="text-lg font-black uppercase leading-tight italic">Tanya AI<br/>Sekarang!</p>
-            <p className="text-[9px] font-bold uppercase opacity-80 mt-1">Saran Misi & Lencana</p>
-          </div>
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-2xl border border-soft-sage shadow-sm">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="font-bold text-scout-green uppercase tracking-tight">Kegiatan Terdekat</h3>
-            <button className="text-accent text-xs font-bold hover:underline">LIHAT SEMUA</button>
-          </div>
-          <div className="space-y-4">
-            {activities.slice(0, 3).map((activity) => (
-              <div key={activity.id} className="flex gap-4 p-4 rounded-xl bg-earth-beige hover:bg-soft-sage transition-colors border border-transparent">
-                <div className="flex-shrink-0 w-12 h-12 bg-white rounded-lg border border-soft-sage flex flex-col items-center justify-center text-scout-brown">
-                  <span className="text-[10px] font-bold uppercase">{new Date(activity.date).toLocaleString('default', { month: 'short' })}</span>
-                  <span className="text-xl font-bold leading-none">{new Date(activity.date).getDate()}</span>
-                </div>
-                <div className="flex-1">
-                  <h4 className="font-bold text-sm text-text-dark">{activity.title}</h4>
-                  <p className="text-xs text-text-light line-clamp-1">{activity.description}</p>
-                  <p className="text-[10px] text-text-light/70 mt-1 flex items-center gap-1">
-                    <Calendar size={10} /> {activity.location}
-                  </p>
-                </div>
-                <ChevronRight size={16} className="text-text-light/30 self-center" />
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-2xl border border-soft-sage shadow-sm relative overflow-hidden">
-          <div className="absolute -top-4 -right-4 w-24 h-24 bg-soft-sage/20 rounded-full blur-2xl" />
-          <div className="flex items-center justify-between mb-6 relative">
-            <h3 className="font-bold text-scout-green uppercase tracking-tight">😎 Squad Paling Aktif</h3>
-            <button className="text-accent text-[10px] font-extrabold hover:underline">GASKAN →</button>
-          </div>
-          <div className="space-y-4">
-            {members.slice(0, 4).map((member) => (
-              <div key={member.id} className="flex items-center gap-3 p-3 rounded-xl hover:bg-earth-beige transition-colors">
-                <div className="w-10 h-10 rounded-full bg-soft-sage flex items-center justify-center font-bold text-scout-green border border-soft-sage">
-                  {member.name.charAt(0)}
-                </div>
-                <div className="flex-1">
-                  <h4 className="font-bold text-sm text-text-dark">{member.name}</h4>
-                  <p className="text-xs text-text-light">{member.skuLevel} • {member.unit}</p>
-                </div>
-                <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${member.status === 'Active' ? 'bg-soft-sage text-scout-green' : 'bg-earth-beige text-text-light'}`}>
-                  {member.status === 'Active' ? 'AKTIF' : 'NON-AKTIF'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MembersView({ 
-  members, 
-  onAdd, 
-  onAssignBadge,
-  onOpenAI 
-}: { 
-  members: Member[], 
-  onAdd: () => void, 
-  onAssignBadge: (m: Member) => void,
-  onOpenAI: () => void 
-}) {
-  const [selectedBadgeId, setSelectedBadgeId] = useState<string>('all');
-
-  const filteredMembers = selectedBadgeId === 'all' 
-    ? members 
-    : members.filter(m => m.badges?.includes(selectedBadgeId));
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <h3 className="text-2xl font-bold tracking-tight text-scout-green">👥 Squad Kita</h3>
-        <div className="flex gap-2">
-          <button 
-            onClick={onOpenAI}
-            className="bg-white hover:bg-earth-beige text-scout-green border border-soft-sage px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm transition-all active:scale-95 group"
-          >
-            <Sparkles size={18} className="text-accent group-hover:animate-spin-slow" /> Tanya AI
-          </button>
-          <button 
-            onClick={onAdd}
-            className="bg-accent hover:opacity-90 text-white px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95"
-          >
-            <Plus size={18} /> Tambah Anggota
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white p-4 rounded-2xl border border-soft-sage shadow-sm flex flex-col md:flex-row items-start md:items-center gap-4 overflow-hidden">
-        <div className="flex items-center gap-2 text-text-light flex-shrink-0">
-          <Filter size={18} />
-          <span className="text-xs font-bold uppercase tracking-wider">Filter Lencana:</span>
-        </div>
-        <div className="flex gap-2 flex-wrap pb-2 md:pb-0">
-          <button
-            onClick={() => setSelectedBadgeId('all')}
-            className={`px-4 py-1.5 rounded-xl text-[10px] font-black transition-all ${
-              selectedBadgeId === 'all' 
-                ? 'bg-scout-green text-white shadow-md' 
-                : 'bg-earth-beige text-text-light hover:bg-soft-sage border border-soft-sage/50'
-            }`}
-          >
-            SEMUA
-          </button>
-          {MOCK_BADGES.map(badge => (
-            <button
-              key={badge.id}
-              onClick={() => setSelectedBadgeId(badge.id)}
-              className={`px-4 py-1.5 rounded-xl text-[10px] font-black transition-all flex items-center gap-2 border ${
-                selectedBadgeId === badge.id 
-                  ? 'bg-scout-green text-white border-scout-green shadow-md' 
-                  : 'bg-white text-text-light hover:bg-earth-beige border-soft-sage/50'
-              }`}
-            >
-              <span className="text-xs">{badge.icon}</span>
-              <span>{badge.name.toUpperCase()}</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-soft-sage overflow-hidden shadow-sm overflow-x-auto">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-earth-beige border-b border-soft-sage">
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest">Nama</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest">Lencana</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest">Golongan</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest">Unit (Gudep)</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest">Join Date</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-text-light uppercase tracking-widest text-right">Aksi</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-soft-sage/30">
-            {filteredMembers.map((member) => (
-              <tr key={member.id} className="hover:bg-earth-beige transition-colors group text-text-dark">
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-soft-sage text-scout-green flex items-center justify-center text-xs font-bold border border-soft-sage">
-                      {member.name.charAt(0)}
-                    </div>
-                    <span className="font-bold text-sm">{member.name}</span>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="flex gap-1 flex-wrap max-w-[150px]">
-                    {member.badges?.map(bid => {
-                      const badge = MOCK_BADGES.find(b => b.id === bid);
-                      return (
-                        <div key={bid} className={`w-6 h-6 rounded-md flex items-center justify-center text-xs shadow-sm ${badge?.color}`} title={badge?.name}>
-                          {badge?.icon}
-                        </div>
-                      );
-                    })}
-                    {(!member.badges || member.badges.length === 0) && <span className="text-[10px] text-text-light/40 italic">Belum ada</span>}
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <span className="text-[10px] px-3 py-1 bg-soft-sage text-scout-green rounded-full font-bold uppercase tracking-tighter">{member.skuLevel}</span>
-                </td>
-                <td className="px-6 py-4 text-sm text-text-light font-medium">{member.unit}</td>
-                <td className="px-6 py-4 text-sm text-text-light font-medium">{member.joinDate}</td>
-                <td className="px-6 py-4 text-right">
-                  <div className="flex items-center justify-end gap-2 text-right">
-                    <button 
-                      onClick={() => onAssignBadge(member)}
-                      className="p-1.5 hover:bg-white hover:shadow-sm border border-transparent hover:border-soft-sage rounded-lg text-text-light hover:text-accent transition-all"
-                      title="Beri Lencana"
-                    >
-                      <Award size={16} />
-                    </button>
-                    <button className="px-3 py-1.5 hover:bg-white hover:shadow-sm border border-transparent hover:border-soft-sage rounded-lg text-text-light hover:text-accent font-bold text-xs transition-all">
-                      Detail
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function BadgesView({ onOpenAI }: { onOpenAI: () => void }) {
-  const categories = ['Kecakapan Umum', 'Kecakapan Khusus', 'Penghargaan'];
+function DashboardView({ members, activities, notifications, onNavigate, isAdmin }: { members: Member[], activities: Activity[], notifications: AppNotification[], onNavigate: (v: View) => void, isAdmin: boolean }) {
+  const stats = [
+    { label: 'Total Anggota', value: members.length, icon: <Users size={24}/>, color: 'bg-blue-500', view: 'members' as View },
+    { label: 'Kegiatan Aktif', value: activities.filter(a => !a.isArchived).length, icon: <Calendar size={24}/>, color: 'bg-scout-green', view: 'activities' as View },
+    { label: 'Penghargaan', value: 12, icon: <Award size={24}/>, color: 'bg-accent', view: 'badges' as View },
+    { label: 'Presensi', value: '85%', icon: <CheckCircle2 size={24}/>, color: 'bg-purple-500', view: 'attendance' as View },
+  ];
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h3 className="text-2xl font-bold tracking-tight text-scout-green">🏅 Galeri Lencana</h3>
-          <p className="text-sm text-text-light">Daftar tanda kecakapan dan penghargaan resmi Gugusdepan Setu.</p>
+      {/* Quick Actions for Admin/Owner */}
+      {isAdmin && (
+        <div className="flex flex-wrap gap-4">
+           <button 
+             onClick={() => onNavigate('members')}
+             className="flex items-center gap-3 px-6 py-4 bg-scout-green text-white rounded-[24px] font-black text-sm uppercase tracking-widest shadow-xl shadow-scout-green/20 hover:scale-105 transition-all"
+           >
+              <Plus size={20} /> Tambah Anggota Baru
+           </button>
+           <button 
+             onClick={() => onNavigate('attendance')}
+             className="flex items-center gap-3 px-6 py-4 bg-white border-2 border-scout-green text-scout-green rounded-[24px] font-black text-sm uppercase tracking-widest hover:bg-scout-green hover:text-white transition-all"
+           >
+              <Scan size={20} /> Absensi QR
+           </button>
         </div>
-        <button 
-          onClick={onOpenAI}
-          className="bg-white hover:bg-earth-beige text-scout-green border border-soft-sage px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm transition-all active:scale-95 group"
-        >
-          <Sparkles size={18} className="text-accent group-hover:animate-bounce" /> Rekomendasi AI
-        </button>
-      </div>
+      )}
 
-      {categories.map(cat => (
-        <section key={cat} className="space-y-4">
-          <h4 className="text-[10px] font-bold text-text-light uppercase tracking-widest border-l-4 border-accent pl-2">{cat}</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {MOCK_BADGES.filter(b => b.category === cat).map(badge => (
-              <div key={badge.id} className="bg-white p-6 rounded-[32px] border border-soft-sage shadow-sm hover:shadow-md transition-all group">
-                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 shadow-lg group-hover:scale-110 transition-transform ${badge.color}`}>
-                  {badge.icon}
-                </div>
-                <h5 className="font-bold text-text-dark">{badge.name}</h5>
-                <p className="text-xs text-text-light mt-2 leading-relaxed">{badge.description}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-function ActivitiesView({ 
-  activities, 
-  onAdd, 
-  onToggleArchive 
-}: { 
-  activities: Activity[], 
-  onAdd: () => void, 
-  onToggleArchive: (id: string) => void 
-}) {
-  const [showArchived, setShowArchived] = useState(false);
-
-  const filteredActivities = activities.filter(a => !!a.isArchived === showArchived);
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h3 className="text-2xl font-bold tracking-tight text-scout-green">🔥 Agenda Seru</h3>
-          <p className="text-sm text-text-light">Semua misi seru Pramuka ada di sini!</p>
-        </div>
-        <div className="flex gap-2">
-          <div className="flex bg-white rounded-xl border border-soft-sage p-1">
-            <button 
-              onClick={() => setShowArchived(false)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${!showArchived ? 'bg-scout-green text-white shadow-sm' : 'text-text-light hover:bg-earth-beige'}`}
-            >
-              ACTIVE
-            </button>
-            <button 
-              onClick={() => setShowArchived(true)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${showArchived ? 'bg-scout-green text-white shadow-sm' : 'text-text-light hover:bg-earth-beige'}`}
-            >
-              ARCHIVE
-            </button>
-          </div>
-          <button 
-            onClick={onAdd}
-            className="bg-accent hover:opacity-90 text-white px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95"
-          >
-            <Plus size={18} /> Misi Baru
-          </button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredActivities.length === 0 ? (
-          <div className="col-span-full py-20 flex flex-col items-center justify-center text-center bg-white rounded-[32px] border border-dashed border-soft-sage">
-            <Archive className="text-soft-sage mb-4" size={48} />
-            <p className="text-sm font-bold text-text-light/50 uppercase tracking-widest">
-              Gak ada misi {showArchived ? 'di arsip' : 'aktif'} nih kak
-            </p>
-          </div>
-        ) : (
-          filteredActivities.map((activity) => (
-            <div key={activity.id} className="bg-white rounded-[32px] border border-soft-sage overflow-hidden shadow-sm flex flex-col hover:shadow-md transition-all group relative">
-               <div className={`h-2 w-full transition-colors ${activity.isArchived ? 'bg-text-light/20' : 'bg-scout-green group-hover:bg-accent'}`} />
-               <div className="p-6 flex-1 space-y-4">
-                  <div className="flex justify-between items-start">
-                    <span className="text-[10px] font-bold px-3 py-1 bg-soft-sage text-scout-green rounded-full uppercase tracking-widest">
-                      {activity.category}
-                    </span>
-                    <span className="text-[10px] font-bold text-text-light uppercase tracking-tighter">{activity.date}</span>
-                  </div>
-                  <div>
-                    <h4 className={`font-bold text-lg text-text-dark mb-1 ${activity.isArchived ? 'text-text-light' : ''}`}>{activity.title}</h4>
-                    <p className="text-sm text-text-light line-clamp-2 leading-relaxed">{activity.description}</p>
-                  </div>
-                  <div className="flex items-center justify-between pt-4 border-t border-soft-sage/30">
-                    <div className="flex items-center gap-2 text-[10px] font-bold text-text-light/60 uppercase">
-                      <Users size={14} className="text-scout-brown" />
-                      <span>{activity.participantsCount} Peserta</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button 
-                        onClick={() => onToggleArchive(activity.id)}
-                        className="p-2 text-text-light hover:text-accent hover:bg-earth-beige rounded-xl transition-all"
-                        title={activity.isArchived ? "Pulihkan" : "Arsipkan"}
-                      >
-                        {activity.isArchived ? <ArchiveRestore size={18} /> : <Archive size={18} />}
-                      </button>
-                      <button className="text-accent text-[10px] font-bold hover:underline bg-accent/10 px-3 py-1.5 rounded-lg uppercase tracking-widest">DETAIL</button>
-                    </div>
-                  </div>
-               </div>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-function AttendanceView({ members, activities }: { members: Member[], activities: Activity[] }) {
-  const [selectedActivity, setSelectedActivity] = useState<string>('all');
-  const [attendance, setAttendance] = useState<Record<string, 'H' | 'I' | 'S' | 'A'>>({});
-  const [showReport, setShowReport] = useState(false);
-
-  const handleMark = (memberId: string, status: 'H' | 'I' | 'S' | 'A') => {
-    setAttendance(prev => ({ ...prev, [memberId]: status }));
-  };
-
-  const getReportData = () => {
-    const stats: Record<'H' | 'I' | 'S' | 'A', number> = { H: 0, I: 0, S: 0, A: 0 };
-    (Object.values(attendance) as Array<'H' | 'I' | 'S' | 'A'>).forEach(status => {
-      stats[status]++;
-    });
-    // Fill in un-marked members as 'A' (Alpa) by default or just leave them?
-    // Let's count them as 'A' for the report if not marked.
-    const totalMarked = Object.keys(attendance).length;
-    const remaining = members.length - totalMarked;
-    stats.A += remaining;
-
-    return [
-      { name: 'Hadir', value: stats.H, color: '#2D5A27' },
-      { name: 'Izin', value: stats.I, color: '#8B5E3C' },
-      { name: 'Sakit', value: stats.S, color: '#3182ce' },
-      { name: 'Alpa', value: stats.A, color: '#e53e3e' },
-    ];
-  };
-
-  const activityTitle = activities.find(a => a.id === selectedActivity)?.title || 'Misi Belum Dipilih';
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h3 className="text-2xl font-bold tracking-tight text-scout-green">✅ Hadir Kuy!</h3>
-          <p className="text-sm text-text-light">Jangan sampai alpa, nanti dikejar hantu scout 👻</p>
-        </div>
-        <div className="flex gap-2">
-          <select 
-            value={selectedActivity}
-            onChange={(e) => setSelectedActivity(e.target.value)}
-            className="bg-white border border-soft-sage rounded-xl px-4 py-2 text-sm font-bold text-text-dark focus:outline-none focus:ring-2 focus:ring-accent"
-          >
-            <option value="all">Pilih Misi</option>
-            {activities.map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
-          </select>
-          <button 
-            onClick={() => setShowReport(true)}
-            className="bg-scout-brown text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-scout-brown/20 hover:opacity-90 transition-all active:scale-95 flex items-center gap-2"
-          >
-             📊 Report
-          </button>
-          <button className="bg-accent text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-accent/20">
-            KIRIM KE PUSAT 🚀
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-soft-sage overflow-hidden shadow-sm">
-        <div className="p-4 bg-earth-beige border-b border-soft-sage flex items-center justify-between">
-          <span className="text-[10px] font-bold text-text-light uppercase tracking-widest">Daftar Kehadiran Siswa</span>
-          <div className="flex gap-4">
-            <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-scout-green"><div className="w-2.5 h-2.5 rounded-full bg-scout-green" /> Hadir</span>
-            <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-scout-brown"><div className="w-2.5 h-2.5 rounded-full bg-scout-brown" /> Izin</span>
-            <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-red-600"><div className="w-2.5 h-2.5 rounded-full bg-red-600" /> Alpa</span>
-          </div>
-        </div>
-        <div className="divide-y divide-soft-sage/30">
-          {members.map((member) => (
-            <div key={member.id} className="p-4 flex items-center justify-between hover:bg-earth-beige transition-colors group">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-soft-sage flex items-center justify-center font-bold text-scout-green ring-1 ring-soft-sage">
-                  {member.name.charAt(0)}
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-text-dark">{member.name}</h4>
-                  <p className="text-[10px] font-bold text-text-light/60 uppercase tracking-tighter">Squad Member • {member.skuLevel}</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                {(['H', 'I', 'S', 'A'] as const).map((code) => (
-                  <button 
-                    key={code}
-                    onClick={() => handleMark(member.id, code)}
-                    className={`w-9 h-9 rounded-xl text-xs font-bold flex items-center justify-center border transition-all ${
-                      attendance[member.id] === code 
-                        ? (code === 'H' ? 'bg-scout-green text-white border-scout-green shadow-sm' :
-                           code === 'I' ? 'bg-scout-brown text-white border-scout-brown shadow-sm' :
-                           code === 'S' ? 'bg-blue-600 text-white border-blue-600 shadow-sm' :
-                           'bg-red-600 text-white border-red-600 shadow-sm')
-                        : (code === 'H' ? 'border-soft-sage bg-white text-scout-green hover:bg-soft-sage' :
-                           code === 'I' ? 'border-soft-sage bg-white text-scout-brown hover:bg-soft-sage' :
-                           code === 'S' ? 'border-soft-sage bg-white text-blue-600 hover:bg-soft-sage' :
-                           'border-soft-sage bg-white text-red-600 hover:bg-soft-sage')
-                    }`}
-                  >
-                    {code}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <AnimatePresence>
-        {showReport && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setShowReport(false)}
-              className="absolute inset-0 bg-scout-green/80 backdrop-blur-md"
-            />
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative bg-white rounded-[32px] p-8 w-full max-w-2xl shadow-2xl border border-soft-sage overflow-hidden"
-            >
-              <div className="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-full -mr-16 -mt-16 blur-3xl" />
-              <div className="relative flex justify-between items-start mb-8">
-                <div>
-                  <h2 className="text-3xl font-extrabold text-scout-green tracking-tight">RAPOR KEHADIRAN</h2>
-                  <p className="text-sm font-bold text-text-light uppercase tracking-widest mt-1">Misi: {activityTitle}</p>
-                </div>
-                <button 
-                  onClick={() => setShowReport(false)}
-                  className="p-2 hover:bg-earth-beige rounded-full text-text-light transition-colors"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-                <div className="h-[250px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={getReportData()} margin={{ top: 20, right: 30, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E8F0E6" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 'bold', fill: '#5F6D5F' }} />
-                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 'bold', fill: '#5F6D5F' }} />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontSize: '12px', fontWeight: 'bold' }}
-                        cursor={{ fill: '#FDFCF0', radius: 8 }}
-                      />
-                      <Bar dataKey="value" radius={[8, 8, 0, 0]} barSize={40}>
-                        {getReportData().map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div className="space-y-4">
-                  {getReportData().map((stat, i) => (
-                    <div key={i} className="flex items-center justify-between p-4 rounded-2xl bg-earth-beige border border-soft-sage">
-                       <div className="flex items-center gap-3">
-                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: stat.color }} />
-                         <span className="text-sm font-bold text-text-dark">{stat.name}</span>
-                       </div>
-                       <span className="text-xl font-black text-scout-green">{stat.value}</span>
-                    </div>
-                  ))}
-                  <div className="pt-4 flex flex-col items-center gap-2">
-                    <p className="text-[10px] font-bold text-text-light uppercase tracking-widest">Total Squad: {members.length}</p>
-                    <button className="w-full bg-scout-green text-white py-3 rounded-xl font-bold hover:bg-scout-green/90 transition-all active:scale-95 shadow-xl shadow-scout-green/20">
-                      UNDUH PDF 📄
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function AddMemberModal({ isOpen, onClose, onAdd }: { isOpen: boolean, onClose: () => void, onAdd: (member: Omit<Member, 'id'>) => void }) {
-  const [name, setName] = useState('');
-  const [skuLevel, setSkuLevel] = useState<Member['skuLevel']>('Penggalang');
-  const [unit, setUnit] = useState('Gudep 01.001');
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0 }} 
-        animate={{ opacity: 1 }} 
-        exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-scout-green/60 backdrop-blur-sm"
-      />
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="relative bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl border border-soft-sage"
-      >
-        <h3 className="text-xl font-bold mb-6 text-scout-green uppercase tracking-tight">Tambah Anggota Baru</h3>
-        <form onSubmit={(e) => {
-          e.preventDefault();
-          onAdd({ name, skuLevel, unit, joinDate: new Date().toISOString().split('T')[0], status: 'Active' });
-          setName('');
-        }} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Nama Lengkap</label>
-            <input 
-              required
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl focus:ring-2 focus:ring-accent outline-none font-bold text-sm" 
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Golongan</label>
-              <select 
-                value={skuLevel}
-                onChange={e => setSkuLevel(e.target.value as any)}
-                className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm"
-              >
-                <option>Siaga</option>
-                <option>Penggalang</option>
-                <option>Penegak</option>
-                <option>Pandega</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Unit (Gudep)</label>
-              <input 
-                value={unit}
-                onChange={e => setUnit(e.target.value)}
-                className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm" 
-              />
-            </div>
-          </div>
-          <div className="pt-4 flex gap-3">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-soft-sage rounded-xl font-bold text-text-light hover:bg-earth-beige">BATAL</button>
-            <button type="submit" className="flex-1 px-4 py-3 bg-accent text-white rounded-xl font-bold shadow-lg">SIMPAN</button>
-          </div>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
-
-function AddActivityModal({ isOpen, onClose, onAdd }: { isOpen: boolean, onClose: () => void, onAdd: (activity: Omit<Activity, 'id'>) => void }) {
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [location, setLocation] = useState('');
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-scout-green/60 backdrop-blur-sm"
-      />
-      <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-        className="relative bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl border border-soft-sage"
-      >
-        <h3 className="text-xl font-bold mb-6 text-scout-green uppercase tracking-tight">Buat Kegiatan Baru</h3>
-        <form onSubmit={(e) => {
-          e.preventDefault();
-          onAdd({ 
-            title, 
-            date, 
-            location, 
-            description: 'Latihan rutin dan materi teknik kepramukaan.', 
-            participantsCount: 0, 
-            category: 'Latihan Rutin' 
-          });
-          setTitle('');
-          setLocation('');
-        }} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Nama Kegiatan</label>
-            <input required value={title} onChange={e => setTitle(e.target.value)} className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none focus:ring-2 focus:ring-accent font-bold text-sm" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Tanggal</label>
-              <input type="date" required value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Lokasi</label>
-              <input value={location} onChange={e => setLocation(e.target.value)} className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm" />
-            </div>
-          </div>
-          <div className="pt-4 flex gap-3">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-3 border border-soft-sage rounded-xl font-bold text-text-light hover:bg-earth-beige">BATAL</button>
-            <button type="submit" className="flex-1 px-4 py-3 bg-accent text-white rounded-xl font-bold shadow-lg">BUAT</button>
-          </div>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
-
-function SettingsView({ 
-  schedules, 
-  onAddSchedule, 
-  onDeleteSchedule,
-  apiToken,
-  onUpdateToken
-}: { 
-  schedules: ReportSchedule[], 
-  onAddSchedule: () => void, 
-  onDeleteSchedule: (id: string) => void,
-  apiToken: string,
-  onUpdateToken: (token: string) => void
-}) {
-  return (
-    <div className="max-w-4xl grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div className="bg-white p-8 rounded-2xl border border-soft-sage shadow-sm h-fit">
-        <h3 className="text-xl font-bold text-scout-green mb-6 uppercase tracking-tight">Profil & Integrasi</h3>
-        <div className="space-y-6">
-          <section>
-            <h4 className="text-[10px] font-bold text-text-light uppercase tracking-widest mb-4">Profil Sekolah</h4>
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Nama Sekolah</label>
-                  <input type="text" defaultValue="SDN Kertarahayu 01" className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent" />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Gugus Depan</label>
-                  <input type="text" defaultValue="Gugusdepan Setu" className="w-full px-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent" />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section className="pt-6 border-t border-soft-sage/30">
-            <h4 className="text-[10px] font-bold text-text-light uppercase tracking-widest mb-4">Integrasi & API</h4>
-            <div className="space-y-4">
-              <div className="bg-soft-sage/30 p-4 rounded-xl border border-soft-sage flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center shadow-sm border border-soft-sage">
-                    <Database size={20} className="text-scout-green" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-bold text-scout-green">Basis Data Sekolah (DAPODIK)</p>
-                    <p className="text-[10px] font-bold text-text-light uppercase tracking-tighter">Sinkronisasi data siswa otomatis</p>
-                  </div>
-                </div>
-                <button className="text-xs font-bold text-accent hover:underline uppercase tracking-widest">TERKONEKSI</button>
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Token API Integrasi</label>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-light/50">
-                    <Lock size={16} />
-                  </span>
-                  <input 
-                    type="text" 
-                    value={apiToken}
-                    onChange={e => onUpdateToken(e.target.value)}
-                    placeholder="Masukkan Token API"
-                    className="w-full pl-10 pr-4 py-2.5 bg-earth-beige border border-soft-sage rounded-xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-                  />
-                </div>
-                <p className="text-[9px] text-text-light/50 italic ml-1 mt-1">Gunakan token ini untuk menghubungkan aplikasi dengan layanan eksternal.</p>
-              </div>
-            </div>
-          </section>
-
-          <div className="pt-6 flex justify-end">
-            <button className="bg-accent text-white px-8 py-3 rounded-xl text-sm font-bold shadow-lg shadow-accent/20 hover:opacity-90 transition-all active:scale-95">
-              SIMPAN PERUBAHAN
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white p-8 rounded-2xl border border-soft-sage shadow-sm h-fit">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-xl font-bold text-scout-green uppercase tracking-tight">📧 Laporan Otomatis</h3>
-          <button 
-            onClick={onAddSchedule}
-            className="p-2 bg-soft-sage text-scout-green rounded-xl hover:bg-scout-green hover:text-white transition-all shadow-sm"
-          >
-            <Plus size={20} />
-          </button>
-        </div>
-        
-        <p className="text-xs text-text-light mb-6">Jadwalkan pengiriman laporan absensi dan kegiatan langsung ke email pembina atau kepala sekolah.</p>
-        
-        <div className="space-y-4">
-          {schedules.length === 0 ? (
-            <div className="py-12 flex flex-col items-center justify-center text-center bg-earth-beige rounded-2xl border border-dashed border-soft-sage">
-               <Mail className="text-soft-sage mb-2" size={32} />
-               <p className="text-xs font-bold text-text-light/50 uppercase tracking-widest">Belum ada jadwal</p>
-            </div>
-          ) : (
-            schedules.map(s => (
-              <div key={s.id} className="p-4 rounded-xl border border-soft-sage bg-earth-beige flex items-center justify-between group">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center text-scout-brown border border-soft-sage">
-                    <Clock size={20} />
-                  </div>
-                  <div>
-                    <h5 className="text-sm font-bold text-text-dark">{s.email}</h5>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[9px] font-bold px-2 py-0.5 bg-scout-green/10 text-scout-green rounded-full uppercase">{s.reportType}</span>
-                      <span className="text-[9px] font-bold text-text-light/60 uppercase tracking-tighter italic">Setiap {s.frequency}</span>
-                    </div>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => onDeleteSchedule(s.id)}
-                  className="p-2 text-text-light/30 hover:text-red-500 hover:bg-red-50 transition-all rounded-lg opacity-0 group-hover:opacity-100"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-        
-        {schedules.length > 0 && (
-          <div className="mt-6 p-4 rounded-xl bg-orange-50 border border-orange-100 flex gap-3">
-            <Info className="text-accent flex-shrink-0" size={16} />
-            <p className="text-[10px] text-accent font-medium leading-relaxed">
-              Sistem akan merangkum data dan mengirimkan file PDF otomatis sesuai jadwal yang ditentukan. Pastikan alamat email sudah benar.
-            </p>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ScheduleReportModal({ isOpen, onClose, onAdd }: { isOpen: boolean, onClose: () => void, onAdd: (s: ReportSchedule) => void }) {
-  const [email, setEmail] = useState('');
-  const [frequency, setFrequency] = useState<'Harian' | 'Mingguan' | 'Bulanan'>('Mingguan');
-  const [reportType, setReportType] = useState<'Absensi' | 'Kegiatan' | 'Keduanya'>('Keduanya');
-
-  if (!isOpen) return null;
-
-  const handleSubmit = (e: any) => {
-    e.preventDefault();
-    onAdd({
-      id: Math.random().toString(36).substr(2, 9),
-      email,
-      frequency,
-      reportType,
-      status: 'Aktif',
-      nextRun: new Date(Date.now() + 86400000).toISOString()
-    });
-    setEmail('');
-  };
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <motion.div 
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        onClick={onClose}
-        className="absolute inset-0 bg-scout-green/60 backdrop-blur-sm"
-      />
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="relative bg-white rounded-[40px] p-10 w-full max-w-lg shadow-2xl border border-soft-sage overflow-hidden"
-      >
-        <div className="flex items-center gap-4 mb-8">
-          <div className="w-12 h-12 bg-scout-green rounded-2xl flex items-center justify-center text-white shadow-lg">
-            <Mail size={24} />
-          </div>
-          <div>
-            <h3 className="text-2xl font-black text-scout-green tracking-tight uppercase">Jadwal Baru</h3>
-            <p className="text-xs font-bold text-text-light uppercase tracking-widest">Atur Laporan Otomatis</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Email Penerima</label>
-            <input 
-              type="email" 
-              required
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="kakak@sekolah.com"
-              className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Frekuensi</label>
-              <select 
-                value={frequency}
-                onChange={e => setFrequency(e.target.value as any)}
-                className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent appearance-none capitalize"
-              >
-                <option value="Harian">Harian</option>
-                <option value="Mingguan">Mingguan</option>
-                <option value="Bulanan">Bulanan</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Tipe Laporan</label>
-              <select 
-                value={reportType}
-                onChange={e => setReportType(e.target.value as any)}
-                className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent appearance-none capitalize"
-              >
-                <option value="Absensi">Absensi</option>
-                <option value="Kegiatan">Kegiatan</option>
-                <option value="Keduanya">Keduanya</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="pt-4 flex gap-3">
-             <button 
-              type="button" 
-              onClick={onClose}
-              className="flex-1 bg-earth-beige text-text-light py-4 rounded-2xl font-black text-sm tracking-widest uppercase hover:bg-soft-sage transition-all"
-            >
-              BATAL
-            </button>
-            <button 
-              type="submit" 
-              className="flex-[2] bg-accent text-white py-4 rounded-2xl font-black text-sm tracking-widest uppercase shadow-xl shadow-accent/20 hover:opacity-90 transition-all active:scale-95"
-            >
-              SIMPAN JADWAL 🚀
-            </button>
-          </div>
-        </form>
-      </motion.div>
-    </div>
-  );
-}
-
-function LoginView({ users, onLogin, onSwitchToRegister }: { users: User[], onLogin: (user: User) => void, onSwitchToRegister: () => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const handleSubmit = (e: any) => {
-    e.preventDefault();
-    setIsLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      const user = users.find(u => u.username === username && u.password === password);
-      if (user) {
-        onLogin(user);
-        toast.success(`Selamat Datang, ${user.fullName}!`, {
-          description: 'Berhasil masuk ke dashboard Gugusdepan Setu.'
-        });
-      } else {
-        toast.error('Gagal Masuk', {
-          description: 'Username atau password salah nih kak. Coba cek lagi ya!'
-        });
-      }
-      setIsLoading(false);
-    }, 1500);
-  };
-
-  return (
-    <div className="min-h-screen bg-earth-beige flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      {/* Decorative Blobs */}
-      <div className="absolute top-0 left-0 w-96 h-96 bg-scout-green/5 rounded-full -translate-x-1/2 -translate-y-1/2 blur-3xl" />
-      <div className="absolute bottom-0 right-0 w-80 h-80 bg-accent/5 rounded-full translate-x-1/2 translate-y-1/2 blur-3xl" />
-
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-md bg-white rounded-[40px] shadow-2xl shadow-scout-green/10 border border-soft-sage p-10 relative z-10"
-      >
-        <div className="flex flex-col items-center mb-10">
-          <div className="w-20 h-20 bg-scout-green rounded-3xl flex items-center justify-center text-white shadow-xl shadow-scout-green/20 mb-6 border-4 border-earth-beige">
-            <Award size={40} />
-          </div>
-          <h2 className="text-3xl font-black text-scout-green tracking-tight text-center">Gugusdepan Setu</h2>
-          <p className="text-xs font-bold text-text-light uppercase tracking-[0.2em] mt-2">SDN Kertarahayu 01</p>
-          <span className="text-[10px] font-bold text-accent mt-1 px-3 py-1 bg-accent/10 rounded-full italic">by. Rafi</span>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Username Admin</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-light/50">
-                <Users size={18} />
-              </span>
-              <input 
-                type="text" 
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                placeholder="Username" 
-                required
-                className="w-full pl-12 pr-4 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent transition-all placeholder:text-text-light/30"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Password</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-light/50">
-                <Lock size={18} />
-              </span>
-              <input 
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••" 
-                required
-                className="w-full pl-12 pr-12 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent transition-all placeholder:text-text-light/30"
-              />
-              <button 
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-text-light/50 hover:text-scout-green transition-colors"
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between px-1">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" className="w-4 h-4 rounded text-scout-green focus:ring-scout-green border-soft-sage" />
-              <span className="text-[10px] font-bold text-text-light uppercase tracking-tighter">Ingat Saya</span>
-            </label>
-            <button type="button" className="text-[10px] font-bold text-accent hover:underline uppercase tracking-tighter">Lupa Password?</button>
-          </div>
-
-          <button 
-            type="submit" 
-            disabled={isLoading}
-            className="w-full bg-scout-green text-white py-4 rounded-2xl font-black text-sm tracking-widest uppercase shadow-2xl shadow-scout-green/30 hover:bg-scout-green/90 transition-all active:scale-95 flex items-center justify-center gap-3 disabled:opacity-70"
-          >
-            {isLoading ? (
-              <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : (
-              <>MASUK SQUAD 🚀</>
-            )}
-          </button>
-        </form>
-
-        <div className="mt-8 text-center space-y-4">
-            <p className="text-xs text-text-light font-bold">
-              Belum punya akun?{' '}
-              <button onClick={onSwitchToRegister} className="text-accent hover:underline uppercase tracking-widest">
-                Daftar Kuy
-              </button>
-            </p>
-            <div className="pt-4 border-t border-soft-sage/30">
-                <p className="text-[10px] font-bold text-text-light/50 uppercase tracking-widest">Aplikasi Pencatatan Digital Pramuka</p>
-                <div className="mt-4 flex flex-col items-center justify-center text-xs text-text-light/40 space-y-1">
-                   <p>© 2026 Gugusdepan Setu</p>
-                   <p className="text-[9px] font-bold text-accent uppercase tracking-tighter">Verified Official Platform</p>
-                </div>
-            </div>
-        </div>
-      </motion.div>
-      <Toaster position="top-right" richColors />
-    </div>
-  );
-}
-
-function RegisterView({ onRegister, onSwitchToLogin }: { onRegister: (u: User) => void, onSwitchToLogin: () => void }) {
-  const [formData, setFormData] = useState({
-    username: '',
-    fullName: '',
-    password: '',
-    confirmPassword: ''
-  });
-  const [isLoading, setIsLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
-  const handleSubmit = (e: any) => {
-    e.preventDefault();
-    if (formData.password !== formData.confirmPassword) {
-      toast.error('Password Gak Mirip!', {
-        description: 'Coba samain dulu passwordnya kak.'
-      });
-      return;
-    }
-
-    setIsLoading(true);
-    setTimeout(() => {
-      const newUser: User = {
-        id: Math.random().toString(36).substr(2, 9),
-        username: formData.username,
-        password: formData.password,
-        fullName: formData.fullName,
-        role: 'Pembina'
-      };
-      onRegister(newUser);
-      toast.success('Pendaftaran Berhasil! 🎉', {
-        description: 'Silakan masuk pake akun yang baru dibuat ya kak.'
-      });
-      setIsLoading(false);
-    }, 1500);
-  };
-
-  return (
-    <div className="min-h-screen bg-earth-beige flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      <div className="absolute top-0 right-0 w-96 h-96 bg-accent/5 rounded-full translate-x-1/2 -translate-y-1/2 blur-3xl" />
-      <div className="absolute bottom-0 left-0 w-80 h-80 bg-scout-green/5 rounded-full -translate-x-1/2 translate-y-1/2 blur-3xl" />
-
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="w-full max-w-md bg-white rounded-[40px] shadow-2xl border border-soft-sage p-10 relative z-10"
-      >
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-accent rounded-2xl flex items-center justify-center text-white shadow-xl shadow-accent/20 mb-4">
-            <Plus size={32} />
-          </div>
-          <h2 className="text-2xl font-black text-scout-green tracking-tight text-center uppercase">Gabung Squad Baru</h2>
-          <p className="text-[10px] font-bold text-text-light uppercase tracking-widest mt-2">Daftar Akun Pengurus/Pembina</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Username Unik</label>
-            <input 
-              type="text" 
-              required
-              value={formData.username}
-              onChange={e => setFormData({...formData, username: e.target.value})}
-              placeholder="Contoh: kak_budi"
-              className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Nama Lengkap Kakak</label>
-            <input 
-              type="text" 
-              required
-              value={formData.fullName}
-              onChange={e => setFormData({...formData, fullName: e.target.value})}
-              placeholder="Contoh: Budi Santoso, S.Pd"
-              className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Sandi Rahasia</label>
-            <div className="relative">
-              <input 
-                type={showPassword ? 'text' : 'password'}
-                required
-                value={formData.password}
-                onChange={e => setFormData({...formData, password: e.target.value})}
-                placeholder="Buat sandi yang kuat"
-                className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-              />
-              <button 
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-text-light/50"
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-1.5 pb-4">
-            <input 
-              type={showPassword ? 'text' : 'password'}
-              required
-              value={formData.confirmPassword}
-              onChange={e => setFormData({...formData, confirmPassword: e.target.value})}
-              placeholder="Ulangin lagi sandinya"
-              className="w-full px-5 py-3.5 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-            />
-          </div>
-
-          <button 
-            type="submit" 
-            disabled={isLoading}
-            className="w-full bg-accent text-white py-4 rounded-2xl font-black text-sm tracking-widest uppercase shadow-xl shadow-accent/20 hover:opacity-90 transition-all active:scale-95 disabled:opacity-70"
-          >
-            {isLoading ? "PROSES DAFTAR..." : "DAFTAR SEKARANG ⛺"}
-          </button>
-        </form>
-
-        <div className="mt-8 text-center">
-            <button onClick={onSwitchToLogin} className="text-xs font-bold text-scout-green hover:underline uppercase tracking-widest">
-              Udah Ada Akun? Login Aja
-            </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-function AIAssistantView({ 
-  members, 
-  activities, 
-  badges 
-}: { 
-  members: Member[], 
-  activities: Activity[], 
-  badges: Badge[] 
-}) {
-  const [messages, setMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([
-    { role: 'assistant', content: 'Halo Kak! Saya asisten cerdas Gugusdepan Setu. Saya sudah terhubung dengan data Squad dan Lencana Kakak. Ada yang bisa saya bantu? Bisa tanya "Siapa yang paling aktif?" atau "Saran lencana buat Budi?" ⛺✨' }
-  ]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-
-  const handleSend = async (e: any) => {
-    e.preventDefault();
-    if (!input.trim() || isLoading) return;
-
-    const userMessage = input.trim();
-    setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-    setIsLoading(true);
-
-    try {
-      const response = await getScoutAssistantResponse(userMessage, { 
-        members, 
-        badges, 
-        activities 
-      });
-      setMessages(prev => [...prev, { role: 'assistant', content: response || 'Waduh, saya bingung jawabnya kak.' }]);
-    } catch (error: any) {
-      toast.error(error.message);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="max-w-4xl mx-auto h-[calc(100vh-140px)] flex flex-col bg-white rounded-[40px] border border-soft-sage shadow-xl overflow-hidden">
-      <div className="p-6 bg-scout-green text-white flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center backdrop-blur-md">
-            <Sparkles size={24} />
-          </div>
-          <div>
-            <h3 className="text-xl font-black tracking-tight uppercase">Pusat Bantuan (AI)</h3>
-            <p className="text-[10px] font-bold text-white/70 uppercase tracking-widest">Asisten Pintar Kakak Pembina</p>
-          </div>
-        </div>
-        <div className="hidden sm:block">
-          <span className="text-[10px] font-bold px-3 py-1 bg-white/10 rounded-full border border-white/20 uppercase tracking-tighter">Powered by Gemini AI</span>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-earth-beige/30">
-        {messages.map((msg, idx) => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {stats.map((s, i) => (
           <motion.div 
-            key={idx}
-            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            key={i}
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: i * 0.1 }}
+            onClick={() => onNavigate(s.view)}
+            className="bg-white p-6 rounded-[32px] border border-soft-sage shadow-sm flex items-center gap-5 hover:shadow-md transition-all cursor-pointer group hover:-translate-y-1"
           >
-            <div className={`max-w-[80%] p-4 rounded-3xl shadow-sm ${
-              msg.role === 'user' 
-                ? 'bg-accent text-white rounded-tr-none' 
-                : 'bg-white text-text-dark border border-soft-sage rounded-tl-none'
-            }`}>
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
+            <div className={`w-14 h-14 rounded-2xl ${s.color} flex items-center justify-center text-white shadow-lg group-hover:rotate-6 transition-transform`}>
+              {s.icon}
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-text-light uppercase tracking-widest leading-none mb-1">{s.label}</p>
+              <p className="text-2xl font-black text-text-dark tracking-tight">{s.value}</p>
             </div>
           </motion.div>
         ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white p-4 rounded-3xl border border-soft-sage shadow-sm flex items-center gap-2">
-              <div className="flex gap-1">
-                <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce" style={{ animationDelay: '0s' }} />
-                <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce" style={{ animationDelay: '0.4s' }} />
-              </div>
-              <span className="text-[10px] font-bold text-scout-green uppercase tracking-widest ml-2">Mengetik...</span>
-            </div>
-          </div>
-        )}
       </div>
 
-      <form onSubmit={handleSend} className="p-4 bg-white border-t border-soft-sage flex items-center gap-3">
-        <input 
-          type="text" 
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          placeholder="Tanya soal materi Pramuka atau ide kegiatan..."
-          className="flex-1 px-6 py-4 bg-earth-beige border border-soft-sage rounded-[24px] outline-none font-bold text-sm focus:ring-2 focus:ring-accent"
-        />
-        <button 
-          type="submit"
-          disabled={isLoading || !input.trim()}
-          className="bg-scout-green text-white p-4 rounded-full shadow-lg shadow-scout-green/30 hover:opacity-90 disabled:opacity-50 transition-all active:scale-95 flex items-center justify-center"
-        >
-          <Zap size={24} />
-        </button>
-      </form>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-8">
+          <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm overflow-hidden relative group">
+             <div className="absolute top-0 right-0 p-8 text-scout-green/10 transform rotate-12 group-hover:rotate-6 transition-transform">
+                <LayoutDashboard size={120} />
+             </div>
+             <h3 className="text-xl font-black text-scout-green mb-6 uppercase tracking-tight relative z-10">Kegiatan Terakhir</h3>
+             <div className="space-y-4 relative z-10">
+                {activities.slice(0, 3).map(a => (
+                  <div key={a.id} className="p-4 bg-earth-beige rounded-2xl flex items-center justify-between group/item hover:bg-soft-sage/20 transition-colors">
+                     <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-scout-green shadow-sm text-sm font-black border border-soft-sage">
+                           {new Date(a.date).getDate()}
+                        </div>
+                        <div>
+                           <p className="text-sm font-bold text-text-dark">{a.title}</p>
+                           <p className="text-[10px] text-text-light uppercase font-bold">{a.location} • {a.participantsCount} Peserta</p>
+                        </div>
+                     </div>
+                     <ChevronRight size={18} className="text-text-light opacity-0 group-hover/item:opacity-100 transition-opacity" />
+                  </div>
+                ))}
+             </div>
+          </div>
+        </div>
+
+        <div className="space-y-8">
+          <div className="bg-scout-green p-8 rounded-[40px] text-white shadow-xl shadow-scout-green/20 relative overflow-hidden">
+             <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10" />
+             <h3 className="text-lg font-black uppercase tracking-tight mb-4 relative z-10">📢 Pengumuman</h3>
+             <div className="space-y-4 relative z-10">
+                {notifications.slice(0, 2).map(n => (
+                   <div key={n.id} className="p-4 bg-white/10 backdrop-blur-md rounded-2xl border border-white/10">
+                      <p className="text-xs font-bold mb-1">{n.title}</p>
+                      <p className="text-[10px] opacity-70 leading-relaxed font-medium">{n.message}</p>
+                   </div>
+                ))}
+             </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
+function IDCardModal({ user, onClose }: { user: User, onClose: () => void }) {
+  const qrValue = JSON.stringify({
+    type: 'scout_login',
+    u: user.username,
+    p: user.password
+  });
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-text-dark/40 backdrop-blur-sm">
+      <motion.div 
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        className="bg-white rounded-[40px] shadow-2xl overflow-hidden max-w-sm w-full relative print:shadow-none print:rounded-none"
+      >
+        <button onClick={onClose} className="absolute top-6 right-6 p-2 hover:bg-earth-beige rounded-full transition-colors z-10 print:hidden">
+          <X size={20} />
+        </button>
+
+        <div className="print-area">
+          {/* Card Front */}
+          <div className="p-8 bg-scout-green text-white relative h-48 flex flex-col justify-end">
+            <div className="absolute top-8 left-8 flex items-center gap-3">
+               <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-scout-green shadow-xl">
+                  <Award size={28} />
+               </div>
+               <div>
+                  <h4 className="font-black text-xl tracking-tighter leading-none">ONE KERTA</h4>
+                  <p className="text-[8px] font-bold uppercase tracking-[0.3em] opacity-70">Gugus Depan Digital</p>
+               </div>
+            </div>
+            <div className="relative z-10">
+               <p className="text-2xl font-black tracking-tight">{user.fullName}</p>
+               <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-accent mt-1">{user.role}</p>
+            </div>
+            <div className="absolute top-0 right-0 p-8 opacity-10">
+               <Users size={120} />
+            </div>
+          </div>
+
+          <div className="p-8 border-x border-b border-soft-sage flex flex-col items-center">
+             <div className="p-4 bg-white rounded-3xl border-2 border-scout-green/10 mb-6 shadow-inner">
+                <QRCodeSVG value={qrValue} size={150} level="H" includeMargin />
+             </div>
+             <p className="text-[10px] font-bold text-text-light uppercase tracking-[0.3em] mb-8">Scan untuk Login Cepat</p>
+             
+             <div className="w-full grid grid-cols-2 gap-4 print:hidden">
+                <button onClick={handlePrint} className="col-span-2 bg-accent text-white py-4 rounded-2xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-3 shadow-xl shadow-accent/20 hover:scale-105 transition-transform">
+                   <QrCode size={20} /> Cetak Kartu Offline
+                </button>
+             </div>
+          </div>
+        </div>
+
+        <style>{`
+          @media print {
+            body * { visibility: hidden; }
+            .print-area, .print-area * { visibility: visible; }
+            .print-area { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); border: none !important; }
+            .print:hidden { display: none !important; }
+          }
+        `}</style>
+      </motion.div>
+    </div>
+  );
+}
+
+function QRScannerModal({ isOpen, onClose, onScan }: { isOpen: boolean, onClose: () => void, onScan: (data: string) => void }) {
+  useEffect(() => {
+    // Note: html5-qrcode implementation would go here
+    // For this environment, we'll simulate the scanner or use a simple UI
+    // Real implementation would look like:
+    /*
+    const scanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 }, false);
+    scanner.render(onScan, (err) => console.log(err));
+    return () => scanner.clear();
+    */
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-text-dark/80 backdrop-blur-md">
+       <div className="bg-white rounded-[40px] p-8 max-w-sm w-full flex flex-col items-center">
+          <div className="flex justify-between items-center w-full mb-8">
+             <h3 className="text-xl font-bold text-scout-green uppercase tracking-tight">Scan Login QR</h3>
+             <button onClick={onClose} className="p-2 hover:bg-earth-beige rounded-full transition-colors"><X size={20}/></button>
+          </div>
+          
+          <div className="w-full aspect-square bg-earth-beige rounded-3xl border-2 border-dashed border-soft-sage flex flex-col items-center justify-center text-center p-8 mb-6">
+             <Scan size={48} className="text-soft-sage mb-4 animate-pulse" />
+             <p className="text-xs font-bold text-text-light/50 uppercase leading-relaxed tracking-widest">Arahkan kamera ke Kartu Anggota Digital anda</p>
+             
+             {/* Placeholder for real scanner */}
+             <div className="mt-8 border-t border-soft-sage/30 pt-8 w-full">
+                <input 
+                  type="text" 
+                  autoFocus
+                  placeholder="Atau tempel data QR di sini..."
+                  className="w-full text-xs p-3 bg-white border border-soft-sage rounded-xl outline-none focus:ring-2 focus:ring-accent"
+                  onChange={(e) => {
+                    if (e.target.value.includes('scout_login')) {
+                      onScan(e.target.value);
+                    }
+                  }}
+                />
+             </div>
+          </div>
+          
+          <button onClick={onClose} className="w-full py-4 text-text-light font-bold text-xs uppercase tracking-widest">Batal</button>
+       </div>
+    </div>
+  );
+}
+
+function MembersView({ members, onAddMember, onDeleteMember, isAdmin }: any) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [newMember, setNewMember] = useState({ name: '', unit: '', skuLevel: 'Siaga' });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-black text-scout-green uppercase tracking-tight">Daftar Anggota Squad</h3>
+        {isAdmin && (
+          <button onClick={() => setIsAdding(!isAdding)} className="bg-accent text-white px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2 hover:scale-105 transition-transform">
+            <Plus size={16} /> Tambah Anggota
+          </button>
+        )}
+      </div>
+
+      {isAdding && (
+        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="bg-white p-6 rounded-3xl border border-soft-sage overflow-hidden mb-6">
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <input type="text" placeholder="Nama Lengkap" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+              <input type="text" placeholder="Unit (Gudep)" value={newMember.unit} onChange={e => setNewMember({...newMember, unit: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+              <select value={newMember.skuLevel} onChange={e => setNewMember({...newMember, skuLevel: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm">
+                 <option>Siaga</option>
+                 <option>Penggalang</option>
+                 <option>Penegak</option>
+                 <option>Pandega</option>
+              </select>
+           </div>
+           <button 
+             onClick={() => {
+               onAddMember({ id: Math.random().toString(), ...newMember, joinDate: new Date().toISOString(), status: 'Active', badges: [] });
+               setIsAdding(false);
+               setNewMember({ name: '', unit: '', skuLevel: 'Siaga' });
+             }}
+             className="mt-4 w-full bg-scout-green text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest"
+           >
+              Simpan Anggota Baru 🪢
+           </button>
+        </motion.div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {members.map((m: Member) => (
+          <div key={m.id} className="bg-white p-6 rounded-[32px] border border-soft-sage shadow-sm hover:shadow-md transition-shadow group relative overflow-hidden">
+             <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none"><Users size={64}/></div>
+             <div className="flex items-center gap-4 mb-4">
+                <div className="w-12 h-12 rounded-2xl bg-scout-green/10 text-scout-green flex items-center justify-center font-black text-lg">
+                   {m.name.charAt(0)}
+                </div>
+                <div>
+                   <p className="font-bold text-text-dark">{m.name}</p>
+                   <p className="text-[10px] text-text-light uppercase font-bold tracking-widest">{m.unit}</p>
+                </div>
+             </div>
+             <div className="flex items-center justify-between pt-4 border-t border-earth-beige">
+                <span className="px-3 py-1 bg-accent/10 text-accent rounded-full text-[10px] font-bold uppercase">{m.skuLevel}</span>
+                {isAdmin && (
+                  <button onClick={() => onDeleteMember(m.id)} className="text-text-light/30 hover:text-red-500 transition-colors">
+                    <Trash2 size={16} />
+                  </button>
+                )}
+             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ActivitiesView({ activities, onAddActivity, onArchiveActivity, isAdmin }: any) {
+  const [isAdding, setIsAdding] = useState(false);
+  const [newActivity, setNewActivity] = useState({ title: '', date: '', location: '', description: '' });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xl font-black text-scout-green uppercase tracking-tight">Agenda Kegiatan Gudep</h3>
+        {isAdmin && (
+          <button onClick={() => setIsAdding(!isAdding)} className="bg-scout-green text-white px-4 py-2 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center gap-2">
+            <Plus size={16} /> Rancang Kegiatan
+          </button>
+        )}
+      </div>
+
+      {isAdding && (
+        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="bg-white p-6 rounded-3xl border border-soft-sage overflow-hidden mb-6">
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <input type="text" placeholder="Judul Kegiatan" value={newActivity.title} onChange={e => setNewActivity({...newActivity, title: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+              <input type="date" value={newActivity.date} onChange={e => setNewActivity({...newActivity, date: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+              <input type="text" placeholder="Lokasi" value={newActivity.location} onChange={e => setNewActivity({...newActivity, location: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+              <input type="text" placeholder="Deskripsi Singkat" value={newActivity.description} onChange={e => setNewActivity({...newActivity, description: e.target.value})} className="px-4 py-3 bg-earth-beige rounded-xl border border-soft-sage outline-none font-bold text-sm" />
+           </div>
+           <button 
+             onClick={() => {
+               onAddActivity({ id: Math.random().toString(), ...newActivity, participantsCount: 0, category: 'Kegiatan', isArchived: false });
+               setIsAdding(false);
+               setNewActivity({ title: '', date: '', location: '', description: '' });
+             }}
+             className="mt-4 w-full bg-accent text-white py-3 rounded-xl font-black text-xs uppercase tracking-widest"
+           >
+              Tayangkan Agenda 🚀
+           </button>
+        </motion.div>
+      )}
+
+      <div className="space-y-4">
+        {activities.filter((a: Activity) => !a.isArchived).map((a: Activity) => (
+          <div key={a.id} className="bg-white p-6 rounded-[32px] border border-soft-sage shadow-sm flex items-center gap-6">
+             <div className="flex flex-col items-center justify-center w-16 h-16 bg-earth-beige rounded-2xl border border-soft-sage">
+                <span className="text-xl font-black text-scout-green">{new Date(a.date).getDate()}</span>
+                <span className="text-[8px] font-black uppercase text-text-light">{new Date(a.date).toLocaleString('id-ID', { month: 'short' })}</span>
+             </div>
+             <div className="flex-1">
+                <h4 className="font-bold text-text-dark">{a.title}</h4>
+                <div className="flex items-center gap-3 mt-1">
+                   <span className="flex items-center gap-1 text-[10px] text-text-light font-bold uppercase"><Scan size={12}/> {a.location}</span>
+                   <span className="flex items-center gap-1 text-[10px] text-accent font-bold uppercase"><Users size={12}/> {a.participantsCount} Peserta</span>
+                </div>
+             </div>
+             {isAdmin && (
+               <button onClick={() => onArchiveActivity(a.id)} className="p-3 hover:bg-red-50 text-text-light hover:text-red-500 rounded-xl transition-all">
+                  <Archive size={20} />
+               </button>
+             )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AttendanceView({ members, activities }: any) {
+  return (
+    <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
+       <h3 className="text-xl font-black text-scout-green uppercase tracking-tight mb-8">Papan Kehadiran Digital</h3>
+       <div className="overflow-x-auto">
+          <table className="w-full text-left">
+             <thead>
+                <tr className="border-b border-soft-sage">
+                   <th className="py-4 text-[10px] font-black uppercase text-text-light tracking-widest">Nama Anggota</th>
+                   {activities.slice(0, 5).map((a: Activity) => (
+                      <th key={a.id} className="py-4 text-[10px] font-black uppercase text-text-light tracking-widest text-center">{a.title.substring(0, 5)}...</th>
+                   ))}
+                </tr>
+             </thead>
+             <tbody>
+                {members.map((m: Member) => (
+                   <tr key={m.id} className="border-b border-soft-sage/30 hover:bg-earth-beige transition-colors">
+                      <td className="py-4 font-bold text-sm text-text-dark">{m.name}</td>
+                      {activities.slice(0, 5).map((a: Activity) => (
+                         <td key={a.id} className="py-4 text-center">
+                            <div className="w-6 h-6 rounded-lg bg-scout-green/10 flex items-center justify-center mx-auto text-scout-green">
+                               <Check size={14} />
+                            </div>
+                         </td>
+                      ))}
+                   </tr>
+                ))}
+             </tbody>
+          </table>
+       </div>
+    </div>
+  );
+}
+
+function BadgesView({ members, badges, onAwardBadge, isAdmin }: any) {
+  const [selectedMember, setSelectedMember] = useState<string>('');
+
+  return (
+    <div className="space-y-8">
+       <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
+          <h3 className="text-xl font-black text-scout-green uppercase tracking-tight mb-6">Pencapaian SKU & TKK</h3>
+          <div className="flex gap-4 items-end mb-8">
+             <div className="flex-1">
+                <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1 mb-1 block">Pilih Anggota</label>
+                <select value={selectedMember} onChange={e => setSelectedMember(e.target.value)} className="w-full px-4 py-3 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm">
+                   <option value="">Pilih Anggota...</option>
+                   {members.map((m: Member) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+             </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+             {badges.map((b: Badge) => (
+                <div key={b.id} className="p-6 bg-earth-beige rounded-[32px] border border-soft-sage group">
+                   <div className={`w-14 h-14 rounded-2xl ${b.color} flex items-center justify-center text-3xl mb-4 shadow-xl border-4 border-white`}>
+                      {b.icon}
+                   </div>
+                   <h5 className="font-black text-sm text-text-dark uppercase tracking-tight leading-tight mb-2">{b.name}</h5>
+                   <p className="text-[10px] text-text-light font-medium leading-relaxed mb-4">{b.description}</p>
+                   {isAdmin && selectedMember && (
+                      <button 
+                        onClick={() => onAwardBadge(selectedMember, b.id)}
+                        className="w-full py-2 bg-white text-scout-green rounded-xl text-[10px] font-black uppercase tracking-widest border border-soft-sage hover:bg-scout-green hover:text-white transition-all"
+                      >
+                         Anugerahkan 🎖️
+                      </button>
+                   )}
+                </div>
+             ))}
+          </div>
+       </div>
+    </div>
+  );
+}
+
+function AIAssistantView() {
+  const [message, setMessage] = useState('');
+  const [chat, setChat] = useState<{role: 'user' | 'ai', content: string}[]>([
+    { role: 'ai', content: 'Siap Kak! Saya Asisten Pandu Digital. Ingin tanya apa tentang Pramuka? (Materi SKU, Sandi, Morse, atau Administrasi)' }
+  ]);
+  const [isTyping, setIsTyping] = useState(false);
+
+  const handleSend = async () => {
+    if (!message.trim()) return;
+    const userMsg = message;
+    setChat([...chat, { role: 'user', content: userMsg }]);
+    setMessage('');
+    setIsTyping(true);
+    
+    try {
+      const response = await getScoutAssistantResponse(userMsg);
+      setChat(prev => [...prev, { role: 'ai', content: response }]);
+    } catch {
+      setChat(prev => [...prev, { role: 'ai', content: 'Maaf Kak, signal di hutan agak terganggu. Coba lagi ya!' }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
+  return (
+    <div className="h-full flex flex-col bg-white rounded-[40px] border border-soft-sage shadow-sm overflow-hidden">
+       <div className="p-6 border-b border-soft-sage bg-scout-green text-white flex items-center gap-4">
+          <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-2xl flex items-center justify-center shadow-inner">
+             <Sparkles size={24} />
+          </div>
+          <div>
+             <h4 className="font-black uppercase tracking-tight">Kaka Asisten AI</h4>
+             <p className="text-[8px] font-black uppercase tracking-[0.2em] opacity-70">Pusat Informasi Gudep Digital</p>
+          </div>
+       </div>
+       
+       <div className="flex-1 overflow-y-auto p-8 space-y-6">
+          {chat.map((c, i) => (
+             <div key={i} className={`flex ${c.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[80%] p-5 rounded-[28px] text-sm font-medium leading-relaxed ${c.role === 'user' ? 'bg-accent text-white rounded-br-none' : 'bg-earth-beige text-text-dark rounded-bl-none border border-soft-sage'}`}>
+                   {c.content}
+                </div>
+             </div>
+          ))}
+          {isTyping && (
+             <div className="flex justify-start">
+                <div className="bg-earth-beige p-4 rounded-full border border-soft-sage flex gap-1">
+                   <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce" />
+                   <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce [animation-delay:0.2s]" />
+                   <div className="w-1.5 h-1.5 bg-scout-green rounded-full animate-bounce [animation-delay:0.4s]" />
+                </div>
+             </div>
+          )}
+       </div>
+
+       <div className="p-6 border-t border-soft-sage bg-earth-beige/30 flex gap-3">
+          <input 
+            type="text" 
+            value={message}
+            onChange={e => setMessage(e.target.value)}
+            onKeyPress={e => e.key === 'Enter' && handleSend()}
+            placeholder="Tanya apapun tentang kepramukaan kak..."
+            className="flex-1 px-6 py-4 bg-white border border-soft-sage rounded-[28px] outline-none font-bold text-sm shadow-sm focus:ring-4 focus:ring-scout-green/5 transition-all"
+          />
+          <button onClick={handleSend} className="w-14 h-14 bg-scout-green text-white rounded-[24px] flex items-center justify-center shadow-lg shadow-scout-green/20 hover:scale-105 active:scale-95 transition-all">
+             <Plus size={24} className="rotate-45" />
+          </button>
+       </div>
+    </div>
+  );
+}
+
+function SettingsView({ user, users, onApproveUser, onDeleteUser, onPromoteUser, onEditProfile, reportSchedules }: any) {
+  const isOwner = user?.role === 'Owner';
+  const isAdmin = user?.role === 'Admin' || isOwner;
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ fullName: user?.fullName, username: user?.username });
+
+  const handleUpdate = (e: any) => {
+    e.preventDefault();
+    onEditProfile(editForm);
+    setIsEditing(false);
+  };
+
+  const pendingUsers = users.filter((u: User) => u.status === 'pending');
+  const activeUsers = users.filter((u: User) => u.status === 'active');
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-5xl">
+      <div className="space-y-8">
+        <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
+           <div className="flex items-center justify-between mb-8">
+              <h3 className="text-xl font-black text-scout-green uppercase tracking-tight">Akun Anda</h3>
+              <button onClick={() => setIsEditing(!isEditing)} className="text-[10px] font-black text-accent hover:underline uppercase tracking-widest flex items-center gap-1">
+                 <Settings size={12} /> {isEditing ? 'Batal' : 'Edit Profil'}
+              </button>
+           </div>
+           
+           {isEditing ? (
+             <form onSubmit={handleUpdate} className="space-y-4">
+                <input type="text" value={editForm.fullName} onChange={e => setEditForm({...editForm, fullName: e.target.value})} className="w-full px-4 py-3 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm" placeholder="Nama Lengkap" />
+                <input type="text" value={editForm.username} onChange={e => setEditForm({...editForm, username: e.target.value})} className="w-full px-4 py-3 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm" placeholder="Username" />
+                <button type="submit" className="w-full bg-scout-green text-white py-3 rounded-2xl font-bold uppercase text-xs tracking-widest">Simpan Perubahan</button>
+             </form>
+           ) : (
+             <div className="flex items-center gap-5 p-6 bg-earth-beige rounded-3xl border border-soft-sage">
+                <div className="w-16 h-16 rounded-[24px] bg-scout-green flex items-center justify-center text-white font-black text-2xl shadow-xl border-4 border-white">
+                   {user?.fullName.charAt(0)}
+                </div>
+                <div>
+                   <p className="text-lg font-black text-text-dark tracking-tight">{user?.fullName}</p>
+                   <p className="text-[10px] text-accent font-black uppercase tracking-[0.2em]">{user?.role} • @{user?.username}</p>
+                </div>
+             </div>
+           )}
+        </div>
+
+        {isAdmin && (
+          <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
+             <h3 className="text-xl font-black text-scout-green mb-6 uppercase tracking-tight">📧 Laporan Otomatis</h3>
+             {reportSchedules.length === 0 ? (
+                <div className="py-12 bg-earth-beige rounded-3xl border border-dashed border-soft-sage flex flex-col items-center justify-center text-center">
+                   <Mail className="text-soft-sage mb-2" size={32} />
+                   <p className="text-xs font-bold text-text-light/50 uppercase tracking-widest">Belum ada jadwal</p>
+                </div>
+             ) : (
+                <div className="space-y-3">
+                   {/* Maps schedules here */}
+                </div>
+             )}
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-8">
+        {isAdmin && pendingUsers.length > 0 && (
+          <div className="bg-white p-8 rounded-[40px] border-4 border-accent/20 shadow-xl shadow-accent/5">
+             <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-2xl bg-accent text-white flex items-center justify-center animate-pulse shadow-lg">
+                   <Bell size={20} />
+                </div>
+                <h3 className="text-xl font-black text-accent uppercase tracking-tight">Persetujuan Akun</h3>
+             </div>
+             <div className="space-y-4">
+                {pendingUsers.map((u: User) => (
+                   <div key={u.id} className="p-4 bg-accent/5 rounded-3xl border border-accent/10 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                         <div className="w-10 h-10 rounded-xl bg-accent text-white flex items-center justify-center font-black">
+                            {u.fullName.charAt(0)}
+                         </div>
+                         <div>
+                            <p className="text-sm font-black text-text-dark">{u.fullName}</p>
+                            <p className="text-[10px] text-accent font-bold uppercase tracking-widest">@{u.username} • {u.role}</p>
+                         </div>
+                      </div>
+                      <div className="flex gap-2">
+                         <button onClick={() => onApproveUser(u.id)} className="p-2.5 bg-scout-green text-white rounded-xl shadow-lg hover:bg-scout-green/90 transition-all">
+                            <Check size={18} />
+                         </button>
+                         <button onClick={() => onDeleteUser(u.id)} className="p-2.5 bg-white text-red-500 rounded-xl border border-red-50 hover:bg-red-50 transition-all shadow-sm">
+                            <X size={18} />
+                         </button>
+                      </div>
+                   </div>
+                ))}
+             </div>
+          </div>
+        )}
+
+        {isAdmin && (
+           <div className="bg-white p-8 rounded-[40px] border border-soft-sage shadow-sm">
+              <h3 className="text-xl font-black text-scout-green mb-6 uppercase tracking-tight">👥 Kelola Kader</h3>
+              <div className="space-y-3">
+                 {activeUsers.map((u: User) => (
+                    <div key={u.id} className="p-4 bg-earth-beige rounded-3xl border border-soft-sage flex items-center justify-between group">
+                       <div className="flex items-center gap-3">
+                          <div className={`w-10 h-10 rounded-xl ${u.role === 'Owner' ? 'bg-accent' : 'bg-scout-green'} text-white flex items-center justify-center font-black`}>
+                             {u.fullName.charAt(0)}
+                          </div>
+                          <div>
+                             <p className="text-sm font-black text-text-dark">{u.fullName}</p>
+                             <p className="text-[10px] text-text-light uppercase font-bold">@{u.username} • {u.role}</p>
+                          </div>
+                       </div>
+                       <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {u.role === 'Pembina' && (
+                            <button onClick={() => onPromoteUser(u.id)} title="Jadikan Admin" className="p-2 bg-white text-accent rounded-xl border border-accent/20 hover:bg-accent hover:text-white transition-all">
+                               <Zap size={16} />
+                            </button>
+                          )}
+                          {u.id !== user?.id && u.role !== 'Owner' && (
+                             <button onClick={() => onDeleteUser(u.id)} title="Hapus Akun" className="p-2 bg-white text-red-500 rounded-xl border border-red-100 hover:bg-red-50 transition-all">
+                                <Trash2 size={16} />
+                             </button>
+                          )}
+                       </div>
+                    </div>
+                 ))}
+              </div>
+           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LoginView({ users, onLogin, onGoogleLogin, onQRLogin, onSwitchToRegister }: any) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const handleSubmit = (e: any) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setTimeout(() => {
+      const user = users.find((u: any) => u.username === username && u.password === password);
+      if (user) {
+        if (user.status === 'pending' && user.role !== 'Owner') {
+          toast.error('Akun Belum Aktif ⏳', {
+            description: 'Akun kakak masih menunggu antrian konfirmasi dari Owner/Admin.'
+          });
+          setIsLoading(false);
+          return;
+        }
+        onLogin(user);
+        toast.success(`Halo Kak ${user.fullName}!`, { description: 'Selamat bertugas kembali.' });
+      } else {
+        toast.error('Gagal Masuk', { description: 'Data login salah kak.' });
+      }
+      setIsLoading(false);
+    }, 1200);
+  };
+
+  return (
+    <div className="min-h-screen bg-earth-beige flex items-center justify-center p-4 relative overflow-hidden">
+        <div className="absolute top-0 left-0 w-96 h-96 bg-scout-green/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
+        <div className="absolute bottom-0 right-0 w-96 h-96 bg-accent/10 rounded-full blur-3xl translate-x-1/2 translate-y-1/2" />
+        
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md bg-white p-10 rounded-[48px] shadow-2xl border border-soft-sage relative z-10">
+           <div className="flex flex-col items-center mb-10 text-center">
+              <div className="w-20 h-20 bg-scout-green rounded-3xl flex items-center justify-center text-white shadow-xl shadow-scout-green/20 mb-6 border-4 border-earth-beige animate-bounce-slow">
+                 <Award size={40} />
+              </div>
+              <h2 className="text-4xl font-black text-scout-green tracking-tight uppercase">ONE<span className="text-accent">KERTA</span></h2>
+              <p className="text-[10px] font-bold text-text-light uppercase tracking-[0.3em] mt-2">Dapodik Gugusdepan Terintegrasi</p>
+           </div>
+
+           <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="space-y-2">
+                 <label className="text-[10px] font-bold text-text-light uppercase tracking-widest pl-1">Identitas (Username)</label>
+                 <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-light/50"><Users size={18} /></span>
+                    <input type="text" required value={username} onChange={e => setUsername(e.target.value)} className="w-full pl-12 pr-4 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-4 focus:ring-scout-green/5 transition-all" placeholder="Gunakan ID Digital/Username" />
+                 </div>
+              </div>
+              <div className="space-y-2">
+                 <div className="flex items-center justify-between px-1">
+                    <label className="text-[10px] font-bold text-text-light uppercase tracking-widest">Sandi Rahasia</label>
+                    <button type="button" className="text-[10px] font-bold text-accent hover:underline uppercase tracking-widest">Lupa Sandi?</button>
+                 </div>
+                 <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-light/50"><Lock size={18} /></span>
+                    <input type={showPassword ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-12 pr-12 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm focus:ring-4 focus:ring-scout-green/5 transition-all" placeholder="••••••••" />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-light/30 hover:text-accent transition-colors">{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button>
+                 </div>
+              </div>
+              <button type="submit" disabled={isLoading} className="w-full bg-scout-green text-white py-4 rounded-3xl font-black tracking-widest uppercase shadow-xl shadow-scout-green/20 hover:opacity-90 active:scale-95 transition-all disabled:opacity-50">
+                 {isLoading ? "MASUK..." : "MASUK SQUAD 🚀"}
+              </button>
+
+              <button 
+                type="button"
+                onClick={onQRLogin}
+                className="w-full bg-accent/10 text-accent py-4 rounded-3xl font-black tracking-widest uppercase hover:bg-accent hover:text-white transition-all flex items-center justify-center gap-3 mt-4"
+              >
+                 <Scan size={20} /> Login dengan QR
+              </button>
+
+              <div className="relative my-6">
+                 <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-soft-sage"></div></div>
+                 <div className="relative flex justify-center text-[10px] uppercase font-bold"><span className="bg-white px-2 text-text-light">Atau</span></div>
+              </div>
+
+              <button 
+                type="button" 
+                onClick={onGoogleLogin}
+                className="w-full bg-white border border-soft-sage text-text-dark py-4 rounded-3xl font-black tracking-widest uppercase shadow-sm hover:bg-earth-beige active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                 Masuk dengan Google
+              </button>
+           </form>
+
+           <div className="mt-8 pt-8 border-t border-soft-sage text-center">
+              <p className="text-xs font-bold text-text-light">Belum punya akun? <button onClick={onSwitchToRegister} className="text-accent underline">Daftar Kuy!</button></p>
+           </div>
+        </motion.div>
+    </div>
+  );
+}
+
+function RegisterView({ onRegister, onGoogleLogin, onSwitchToLogin }: any) {
+  const [formData, setFormData] = useState({ fullName: '', username: '', password: '', role: 'Pembina' as any });
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleSubmit = (e: any) => {
+    e.preventDefault();
+    const forbiddenUsernames = ['admin', 'owner', 'root'];
+    if (forbiddenUsernames.includes(formData.username.toLowerCase())) {
+      toast.error('Gagal Mendaftar', {
+        description: `Username "${formData.username}" tidak tersedia karena sudah dipesan kak!`
+      });
+      return;
+    }
+    setIsLoading(true);
+    setTimeout(() => {
+      onRegister({ 
+        id: Math.random().toString(36).substr(2, 9), 
+        ...formData, 
+        status: 'pending' 
+      });
+      setIsLoading(false);
+    }, 1200);
+  };
+
+  return (
+    <div className="min-h-screen bg-earth-beige flex items-center justify-center p-4">
+        <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-md bg-white p-10 rounded-[48px] shadow-2xl border border-soft-sage">
+           <div className="flex flex-col items-center mb-10 text-center">
+              <div className="w-16 h-16 bg-accent rounded-2xl flex items-center justify-center text-white mb-6 shadow-xl shadow-accent/20">
+                 <Plus size={32} />
+              </div>
+              <h2 className="text-2xl font-black text-scout-green uppercase tracking-tight">KADER BARU</h2>
+              <p className="text-[10px] font-bold text-text-light uppercase tracking-widest mt-2">Daftar Akun Pengurus Digital</p>
+           </div>
+
+           <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="space-y-1.5">
+                 <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Nama Lengkap Kakak</label>
+                 <input type="text" required value={formData.fullName} onChange={e => setFormData({...formData, fullName: e.target.value})} className="w-full px-5 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm" placeholder="Contoh: Kak Budi" />
+              </div>
+              <div className="space-y-1.5">
+                 <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Username (ID Digital)</label>
+                 <input type="text" required value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} className="w-full px-5 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm" placeholder="kak_budi" />
+              </div>
+              <div className="space-y-1.5">
+                 <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Daftar Sebagai apa?</label>
+                 <div className="grid grid-cols-2 gap-3">
+                    <button type="button" onClick={() => setFormData({...formData, role: 'Pembina'})} className={`py-3 rounded-xl text-[10px] font-black uppercase transition-all ${formData.role === 'Pembina' ? 'bg-scout-green text-white shadow-lg' : 'bg-earth-beige text-text-light border border-soft-sage'}`}>PEMBINA</button>
+                    <button type="button" onClick={() => setFormData({...formData, role: 'Admin'})} className={`py-3 rounded-xl text-[10px] font-black uppercase transition-all ${formData.role === 'Admin' ? 'bg-scout-green text-white shadow-lg' : 'bg-earth-beige text-text-light border border-soft-sage'}`}>ADMIN</button>
+                 </div>
+              </div>
+              <div className="space-y-1.5">
+                 <label className="text-[10px] font-bold text-text-light uppercase tracking-widest ml-1">Sandi Rahasia</label>
+                 <input type="password" required value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full px-5 py-4 bg-earth-beige border border-soft-sage rounded-2xl outline-none font-bold text-sm" placeholder="••••••••" />
+              </div>
+              <button type="submit" disabled={isLoading} className="w-full bg-accent text-white py-4 rounded-3xl font-black tracking-widest uppercase shadow-xl hover:opacity-90 active:scale-95 transition-all mt-4 disabled:opacity-50">
+                 {isLoading ? "MENDAFTAR..." : "KIRIM PENDAFTARAN 🪢"}
+              </button>
+
+              <div className="relative my-6">
+                 <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-soft-sage"></div></div>
+                 <div className="relative flex justify-center text-[10px] uppercase font-bold"><span className="bg-white px-2 text-text-light">Atau</span></div>
+              </div>
+
+              <button 
+                type="button" 
+                onClick={onGoogleLogin}
+                className="w-full bg-white border border-soft-sage text-text-dark py-4 rounded-3xl font-black tracking-widest uppercase shadow-sm hover:bg-earth-beige active:scale-95 transition-all flex items-center justify-center gap-3"
+              >
+                 <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                 Daftar dengan Google
+              </button>
+           </form>
+
+           <p className="mt-8 text-center text-xs font-bold text-text-light">Udah punya akun? <button onClick={onSwitchToLogin} className="text-accent underline">Masuk Aja</button></p>
+        </motion.div>
+    </div>
+  );
+}

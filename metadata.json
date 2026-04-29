@@ -1,6 +1,6 @@
 {
-  "name": "Pramuka Digital",
-  "description": "Platform pencatatan kegiatan Pramuka digital, manajemen anggota, dan sistem absensi siswa terintegrasi untuk Gugusdepan Setu.",
-  "requestFramePermissions": [],
+  "name": "ONE KERTA",
+  "description": "Platform pencatatan kegiatan Pramuka digital ONE KERTA, manajemen anggota, dan sistem absensi siswa terintegrasi.",
+  "requestFramePermissions": ["camera"],
   "majorCapabilities": []
 }

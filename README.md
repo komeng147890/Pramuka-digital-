@@ -1,20 +1,33 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Pramuka Digital - Gugusdepan Setu
 
-# Run and deploy your AI Studio app
+Platform cerdas pencatatan kegiatan Pramuka digital, manajemen anggota, dan sistem absensi siswa terintegrasi untuk Gugusdepan Setu (SDN Kertarahayu 01).
 
-This contains everything you need to run your app locally.
+## Fitur Utama
 
-View your app in AI Studio: https://ai.studio/apps/e95eaadb-1eb4-4603-a8d5-ad26acda0cd1
+- **Dashboard Real-time**: Statistik anggota, lencana, dan kehadiran.
+- **Squad Kita**: Manajemen database anggota dengan fitur filter lencana.
+- **Kartu Anggota Digital**: Sistem Barcode/QR Code untuk ID Card siswa.
+- **QR Scanner**: Absensi dan pemberian lencana instan via scan kamera.
+- **Koleksi Lencana**: Sistem reward kecakapan (SKU/TKK) digital.
+- **Tanya AI (Kakak Pembina)**: Asisten cerdas berbasis Gemini AI untuk bantuan administratif dan teknis kepramukaan.
+- **Impor Data**: Fitur impor massal daftar nama siswa.
 
-## Run Locally
+## Teknologi
 
-**Prerequisites:**  Node.js
+- **Frontend**: React + TypeScript + Vite
+- **Styling**: Tailwind CSS
+- **Animations**: Motion (Framer Motion)
+- **Icons**: Lucide React
+- **AI**: Google Gemini API (@google/genai)
+- **Scanning**: html5-qrcode
 
+## Instalasi Lokal
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. Clone repositori ini.
+2. Jalankan `npm install`.
+3. Salin `.env.example` ke `.env` dan isi kunci API yang diperlukan.
+4. Jalankan `npm run dev`.
+
+## Kontribusi
+
+Dibuat dengan ❤️ untuk kemajuan Pramuka Indonesia.

@@ -11,3 +11,13 @@
   
   --font-sans: "Helvetica Neue", Arial, sans-serif;
 }
+
+@media print {
+  button, .no-print, [data-ignore-print] {
+    display: none !important;
+  }
+  
+  .fixed {
+    position: relative !important;
+  }
+}
